@@ -1,0 +1,29 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+build/
+dist/
+*.spec
+.venv/
+venv/
+env/
+
+# --- 运行期数据（默认在 %APPDATA%\CampusNet，这里兜底） ---
+settings.json
+history.json
+counters.json
+campus_usage.json
+campusnet.log
+*.log
+
+# --- 编辑器 / 系统 ---
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
