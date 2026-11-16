@@ -28,6 +28,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QSplitter,
+    QStackedWidget,
     QTableWidgetItem,
     QTreeWidget,
     QTreeWidgetItem,
@@ -37,13 +38,14 @@ from PyQt5.QtWidgets import (
 
 from qfluentwidgets import (
     BodyLabel,
+    CheckBox,
     FluentIcon as FIF,
     LineEdit,
     PlainTextEdit,
     PrimaryPushButton,
     PushButton,
     SegmentedWidget,
-    SwitchButton,
+    StrongBodyLabel,
     TableWidget,
 )
 
@@ -126,27 +128,69 @@ class DeveloperPage(QWidget):
 
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        scroll, layout = scroll_page(self)
-        outer.addWidget(scroll)
+        outer.setContentsMargins(28, 16, 28, 0)
+        outer.setSpacing(12)
 
-        layout.insertWidget(0, self._build_env_card())
-        layout.insertWidget(1, self._build_browser_card())
+        self.segmented = SegmentedWidget(self)
+        self.stack = QStackedWidget(self)
+
+        self.browse_view = self._make_page(self._build_browser_card())
+        self.sitemap_view = self._make_page(self._build_sitemap_card())
+        self.env_view = self._make_page(self._build_env_card())
 
         from .tools import LogsView
 
         self.logs_view = LogsView(self.service, self)
-        inner = self.logs_view.layout()
-        if inner is not None:
-            inner.setContentsMargins(0, 0, 0, 0)
-            inner.setSpacing(0)
-        layout.insertWidget(2, self.logs_view)
+
+        for key, text, view in (
+            ("browse", "接口浏览", self.browse_view),
+            ("sitemap", "站点地图", self.sitemap_view),
+            ("env", "运行环境", self.env_view),
+            ("logs", "运行日志", self.logs_view),
+        ):
+            self.segmented.addItem(key, text)
+            self.stack.addWidget(view)
+
+        self.segmented.setCurrentItem("browse")
+        self.segmented.currentItemChanged.connect(self._on_segment)
+
+        outer.addWidget(self.segmented)
+        outer.addWidget(self.stack, 1)
+
         self.logs_view.load_history()
-
-        layout.insertWidget(3, self._build_sitemap_card())
-
-        layout.addStretch(1)
         self.refresh_env()
+
+    def _make_page(self, *cards: QWidget) -> QWidget:
+        """一个带滚动的分区页：卡片按顺序自上而下排。"""
+        page = QWidget(self)
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll, layout = scroll_page(page)
+        outer.addWidget(scroll)
+        for card in cards:
+            layout.addWidget(card)
+        layout.addStretch(1)
+        return page
+
+    def _on_segment(self, key: str) -> None:
+        mapping = {
+            "browse": self.browse_view,
+            "sitemap": self.sitemap_view,
+            "env": self.env_view,
+            "logs": self.logs_view,
+        }
+        target = mapping.get(key)
+        if target is not None:
+            self.stack.setCurrentWidget(target)
+        if key == "env":
+            self.refresh_env()
+            return
+        if key == "logs":
+            self.logs_view.load_history()
+            return
+        if key == "browse":
+            self.search.setFocus()
+
 
     def _build_env_card(self) -> Card:
         card = Card("运行环境", parent=self)
@@ -212,10 +256,15 @@ class DeveloperPage(QWidget):
         self.raw_button = PushButton(FIF.DOCUMENT, "看原始 JSON", self)
         self.raw_button.clicked.connect(self._toggle_raw)
         toolbar.addWidget(self.raw_button)
+
+        self.copy_button = PushButton(FIF.COPY, "复制结果", self)
+        self.copy_button.clicked.connect(self.copy_result)
+        toolbar.addWidget(self.copy_button)
         card.add_layout(toolbar)
 
         splitter = QSplitter(Qt.Horizontal, self)
         splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(8)
 
         left = QWidget(splitter)
         left_box = QVBoxLayout(left)
@@ -223,8 +272,10 @@ class DeveloperPage(QWidget):
         left_box.setSpacing(6)
         self.keys = QTreeWidget(left)
         self.keys.setHeaderLabels(["分类 / 接口"])
-        self.keys.setMinimumWidth(280)
-        self.keys.setMinimumHeight(300)
+        self.keys.setMinimumWidth(260)
+        self.keys.setMinimumHeight(420)
+        self.keys.setAlternatingRowColors(True)
+        self.keys.setUniformRowHeights(True)
         self.keys.itemSelectionChanged.connect(self._on_selection_changed)
         self.keys.itemDoubleClicked.connect(lambda *_: self.call_endpoint())
         left_box.addWidget(self.keys)
@@ -234,9 +285,10 @@ class DeveloperPage(QWidget):
         right_box = QVBoxLayout(right)
         right_box.setContentsMargins(0, 0, 0, 0)
         right_box.setSpacing(6)
-        self.detail_label = BodyLabel("在左边选一个接口", right)
+        self.detail_label = StrongBodyLabel("在左边选一个接口", right)
         right_box.addWidget(self.detail_label)
         self.status_label = BodyLabel("", right)
+        self.status_label.setWordWrap(True)
         self.status_label.setTextColor(theme.color("text_secondary"), theme.color("text_secondary"))
         right_box.addWidget(self.status_label)
 
@@ -245,12 +297,15 @@ class DeveloperPage(QWidget):
         self.values.setHeaderLabels(["名称", "类型", "数据"])
         self.values.setColumnWidth(0, 240)
         self.values.setColumnWidth(1, 90)
-        self.values.setMinimumHeight(300)
+        self.values.setMinimumHeight(420)
+        self.values.setAlternatingRowColors(True)
+        values_header = self.values.header()
+        values_header.setStretchLastSection(True)
         right_box.addWidget(self.values)
 
         self.raw_output = PlainTextEdit(right)
         self.raw_output.setReadOnly(True)
-        self.raw_output.setMinimumHeight(300)
+        self.raw_output.setMinimumHeight(420)
         self.raw_output.setVisible(False)
         right_box.addWidget(self.raw_output)
         splitter.addWidget(right)
@@ -264,7 +319,7 @@ class DeveloperPage(QWidget):
         return card
 
     def _build_sitemap_card(self) -> Card:
-        card = Card("校园网站点地图", "抓取学校服务器上可访问的页面、资源与接口", parent=self)
+        card = Card("校园网站点地图", parent=self)
         self.site_card = card
 
         row = QHBoxLayout()
@@ -281,10 +336,10 @@ class DeveloperPage(QWidget):
         self.site_button.clicked.connect(self.start_sitemap_crawl)
         row.addWidget(self.site_button)
 
-        self.site_scan = SwitchButton(self)
+        self.site_scan = CheckBox("扫描脚本里的隐藏地址", self)
         self.site_scan.setChecked(True)
+        self.site_scan.setToolTip("在 .js 里查找拼出来的 .html 与接口路径，耗时略长")
         row.addWidget(self.site_scan)
-        row.addWidget(BodyLabel("同时扫描脚本里的隐藏地址", self))
         card.add_layout(row)
 
         self.site_summary = BodyLabel(self._site_summary_text, self)
@@ -315,7 +370,8 @@ class DeveloperPage(QWidget):
         self.site_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.site_table.verticalHeader().setVisible(False)
         self.site_table.setWordWrap(False)
-        self.site_table.setMinimumHeight(260)
+        self.site_table.setAlternatingRowColors(True)
+        self.site_table.setMinimumHeight(380)
         header = self.site_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.Stretch)
         header.setSectionResizeMode(1, QHeaderView.Stretch)
@@ -909,4 +965,4 @@ def _app_version() -> str:
 
         return str(__version__)
     except Exception:
-        return "1.3.2"
+        return "1.3.3"

@@ -513,38 +513,41 @@ class SettingsPage(QWidget):
         # 关于
         self.about_card = Card('关于', parent=self)
 
-        # 品牌区：一行里放图标 + 程序名（可自定义）+ 版本标签，简介另起一行并与文字左对齐
-        brand = QVBoxLayout()
+        # 品牌区：图标在左、纵向居中于「标题 + 一句话简介」两行之间，右侧文字两行左对齐
+        brand = QHBoxLayout()
         brand.setContentsMargins(0, 2, 0, 0)
-        brand.setSpacing(6)
+        brand.setSpacing(14)
 
-        head_row = QHBoxLayout()
-        head_row.setContentsMargins(0, 0, 0, 0)
-        head_row.setSpacing(12)
-
-        icon_size = 40
+        icon_size = 52
         app_icon = IconWidget(QIcon(resource_path('app.ico')), self.about_card)
         app_icon.setFixedSize(icon_size, icon_size)
-        head_row.addWidget(app_icon, 0, Qt.AlignVCenter)
+        brand.addWidget(app_icon, 0, Qt.AlignVCenter)
 
+        brand_text = QVBoxLayout()
+        brand_text.setContentsMargins(0, 0, 0, 0)
+        brand_text.setSpacing(4)
+
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(10)
         self.about_name_label = TitleLabel(display_name(''), self.about_card)
-        head_row.addWidget(self.about_name_label, 0, Qt.AlignVCenter)
+        title_row.addWidget(self.about_name_label, 0, Qt.AlignVCenter)
         version_chip = CaptionLabel(f'v{_app_version()}', self.about_card)
         version_chip.setStyleSheet(
             f'color: {theme.color("accent")};'
             f'background-color: {theme.color("accent_soft")};'
             'border-radius: 9px; padding: 2px 8px;'
         )
-        head_row.addWidget(version_chip, 0, Qt.AlignVCenter)
-        head_row.addStretch(1)
-        brand.addLayout(head_row)
-
-        tagline = body_label(
-            '校园网自动连接、认证与流量统计，一个窗口完成。',
-            parent=self.about_card,
+        title_row.addWidget(version_chip, 0, Qt.AlignVCenter)
+        title_row.addStretch(1)
+        brand_text.addLayout(title_row)
+        brand_text.addWidget(
+            body_label(
+                '校园网自动连接、认证与流量统计，一个窗口完成。',
+                parent=self.about_card,
+            )
         )
-        tagline.setContentsMargins(icon_size + 12, 0, 0, 0)
-        brand.addWidget(tagline)
+        brand.addLayout(brand_text, 1)
         self.about_card.add_layout(brand)
         self.about_card.add(divider(self.about_card))
 
@@ -1210,4 +1213,4 @@ def _app_version() -> str:
         from main import __version__
         return str(__version__)
     except Exception:
-        return '1.3.2'
+        return '1.3.3'
