@@ -21,10 +21,14 @@ import platform
 import sys
 from typing import Any
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QTimer, QUrl, Qt, pyqtSignal
+from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import (
+    QAbstractItemView,
     QHBoxLayout,
+    QHeaderView,
     QSplitter,
+    QTableWidgetItem,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -38,14 +42,28 @@ from qfluentwidgets import (
     PlainTextEdit,
     PrimaryPushButton,
     PushButton,
+    SegmentedWidget,
+    SwitchButton,
+    TableWidget,
 )
 
 from .. import theme
 from ..async_task import run_async
 from ..toasts import Toast
 from ..widgets import Card, KVGrid, scroll_page
+from ...net.sitemap import crawl
 
 SECRET_ENTRY = "password_plaintext"
+
+SITE_VIEWS: list[tuple[str, str]] = [
+    ("pages", "页面"),
+    ("apis", "接口"),
+    ("assets", "资源"),
+    ("discovered", "脚本发现"),
+    ("errors", "失败"),
+]
+
+SITE_DEFAULT_URL = "http://10.100.2.2/"
 
 ENDPOINTS: list[tuple[str, str, str, str, str, bool]] = [
     ("账户与套餐", "selfservice", "account_info", "账户信息", "套餐名、账号状态、余额、开户时间、实时在线情况", True),
@@ -90,6 +108,8 @@ ENDPOINTS: list[tuple[str, str, str, str, str, bool]] = [
 class DeveloperPage(QWidget):
     """开发者模式。"""
 
+    site_progress = pyqtSignal(str, int, int)
+
     def __init__(self, service, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("DeveloperPage")
@@ -97,6 +117,11 @@ class DeveloperPage(QWidget):
         self._current = None
         self._secret_value = ""
         self._secret_shown = False
+        self._site_result: dict[str, Any] = {}
+        self._site_view = "pages"
+        self._site_busy = False
+        self._site_summary_text = "尚未抓取。填好入口地址后点「开始抓取」。"
+        self.site_progress.connect(self._on_site_progress)
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -117,6 +142,8 @@ class DeveloperPage(QWidget):
             inner.setSpacing(0)
         layout.insertWidget(2, self.logs_view)
         self.logs_view.load_history()
+
+        layout.insertWidget(3, self._build_sitemap_card())
 
         layout.addStretch(1)
         self.refresh_env()
@@ -235,6 +262,235 @@ class DeveloperPage(QWidget):
 
         self._refresh_tree()
         return card
+
+    def _build_sitemap_card(self) -> Card:
+        card = Card("校园网站点地图", "抓取学校服务器上可访问的页面、资源与接口", parent=self)
+        self.site_card = card
+
+        row = QHBoxLayout()
+        row.setSpacing(8)
+
+        self.site_url = LineEdit(self)
+        self.site_url.setPlaceholderText("入口地址，例如 http://10.100.2.2/")
+        self.site_url.setText(SITE_DEFAULT_URL)
+        self.site_url.setClearButtonEnabled(True)
+        self.site_url.returnPressed.connect(self.start_sitemap_crawl)
+        row.addWidget(self.site_url, 1)
+
+        self.site_button = PrimaryPushButton(FIF.SYNC, "开始抓取", self)
+        self.site_button.clicked.connect(self.start_sitemap_crawl)
+        row.addWidget(self.site_button)
+
+        self.site_scan = SwitchButton(self)
+        self.site_scan.setChecked(True)
+        row.addWidget(self.site_scan)
+        row.addWidget(BodyLabel("同时扫描脚本里的隐藏地址", self))
+        card.add_layout(row)
+
+        self.site_summary = BodyLabel(self._site_summary_text, self)
+        self.site_summary.setWordWrap(True)
+        card.add(self.site_summary)
+
+        tools_row = QHBoxLayout()
+        tools_row.setSpacing(8)
+        self.site_segmented = SegmentedWidget(self)
+        for key, text in SITE_VIEWS:
+            self.site_segmented.addItem(key, text)
+        self.site_segmented.currentItemChanged.connect(self._on_site_view_changed)
+        tools_row.addWidget(self.site_segmented)
+        tools_row.addStretch(1)
+
+        self.site_copy_button = PushButton(FIF.COPY, "复制选中地址", self)
+        self.site_copy_button.clicked.connect(self.copy_selected_site_url)
+        tools_row.addWidget(self.site_copy_button)
+        card.add_layout(tools_row)
+
+        self.site_table = TableWidget(self)
+        self.site_table.setColumnCount(3)
+        self.site_table.setHorizontalHeaderLabels(["地址", "标题 / 备注", "大小 / 状态"])
+        self.site_table.setBorderVisible(True)
+        self.site_table.setBorderRadius(6)
+        self.site_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.site_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.site_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.site_table.verticalHeader().setVisible(False)
+        self.site_table.setWordWrap(False)
+        self.site_table.setMinimumHeight(260)
+        header = self.site_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.site_table.doubleClicked.connect(self._on_site_double_clicked)
+        card.add(self.site_table)
+
+        self.site_segmented.setCurrentItem("pages")
+        return card
+
+    def _on_site_progress(self, url: str, pages_so_far: int, visited: int) -> None:
+        self.site_summary.setText(f"正在抓取… 已访问 {visited} 个地址 · 已收录 {pages_so_far} 个页面")
+
+    def start_sitemap_crawl(self) -> None:
+        if self._site_busy:
+            return
+        url = self.site_url.text().strip()
+        if not url:
+            Toast.warning(self, "缺少入口地址", "先填一个入口地址，例如 http://10.100.2.2/")
+            return
+        self._site_busy = True
+        self.site_button.setEnabled(False)
+        self.site_button.setText("抓取中…")
+        self.site_summary.setText("正在抓取… 0 个地址")
+        run_async(
+            crawl,
+            url,
+            max_pages=200,
+            max_depth=3,
+            timeout=8.0,
+            scan_scripts=self.site_scan.isChecked(),
+            max_scripts=40,
+            on_progress=self.site_progress.emit,
+            on_done=self._on_site_crawl_done,
+            on_error=self._on_site_crawl_error,
+        )
+
+    def _finish_site_busy(self) -> None:
+        self._site_busy = False
+        self.site_button.setEnabled(True)
+        self.site_button.setText("开始抓取")
+
+    def _on_site_crawl_done(self, result: Any) -> None:
+        self._finish_site_busy()
+        if not isinstance(result, dict) or not result.get("ok"):
+            message = result.get("message") if isinstance(result, dict) else ""
+            message = str(message or "没有拿到抓取结果。")
+            self._site_summary_text = f"抓取失败：{message}"
+            self.site_summary.setText(self._site_summary_text)
+            Toast.error(self, "抓取失败", message[:300])
+            return
+        self._apply_site_result(result)
+
+    def _on_site_crawl_error(self, message: str) -> None:
+        self._finish_site_busy()
+        text = str(message or "未知错误")
+        self._site_summary_text = "抓取失败：" + text.splitlines()[0][:200]
+        self.site_summary.setText(self._site_summary_text)
+        Toast.error(self, "抓取失败", text[:300])
+
+    def _apply_site_result(self, result: dict[str, Any]) -> None:
+        """把一份 crawl 结果填进汇总行与表格（测试直接调用这里）。"""
+        self._site_result = result or {}
+        data = self._site_result
+        stats = data.get("stats") or {}
+        pages = int(stats.get("pages", len(data.get("pages") or [])))
+        apis = int(stats.get("apis", len(data.get("apis") or [])))
+        assets = int(stats.get("assets", len(data.get("assets") or [])))
+        errors = int(stats.get("errors", len(data.get("errors") or [])))
+        try:
+            elapsed = float(data.get("elapsed") or 0.0)
+        except (TypeError, ValueError):
+            elapsed = 0.0
+        text = f"已发现 {pages} 个页面 · {apis} 个接口 · {assets} 个资源 · 用时 {elapsed:.1f}s"
+        if errors:
+            text += f" · {errors} 个地址抓取失败"
+        self._site_summary_text = text
+        self.site_summary.setText(text)
+        self._refresh_site_table()
+
+    def _on_site_view_changed(self, key: str) -> None:
+        self._site_view = key or "pages"
+        self._refresh_site_table()
+
+    def _site_rows(self) -> list[tuple[str, str, str, str]]:
+        data = self._site_result or {}
+        view = self._site_view
+        rows: list[tuple[str, str, str, str]] = []
+
+        if view == "pages":
+            for item in data.get("pages") or []:
+                url = str(item.get("url") or "")
+                title = str(item.get("title") or "（无标题）")
+                meta = f"HTTP {item.get('status', '?')} · {_format_size(item.get('size'))}"
+                rows.append((url, title, meta, f"{url}\n标题：{title}\n深度：{item.get('depth', '?')}"))
+            return rows
+
+        if view == "apis":
+            for item in data.get("apis") or []:
+                url = str(item.get("url") or "")
+                status = item.get("status") or 0
+                if status:
+                    note = "接口"
+                    meta = f"HTTP {status} · {_format_size(item.get('size'))}"
+                else:
+                    note = "脚本中发现，未请求"
+                    meta = "未请求"
+                rows.append((url, note, meta, url))
+            return rows
+
+        if view == "assets":
+            for item in data.get("assets") or []:
+                url = str(item.get("url") or "")
+                ext = str(item.get("ext") or "资源")
+                refs = item.get("refs", 1)
+                note = f"{ext} · 被引用 {refs} 次"
+                rows.append((url, note, "—", f"{url}\n来源：{item.get('from') or '-'}"))
+            return rows
+
+        if view == "discovered":
+            for item in data.get("discovered") or []:
+                url = str(item.get("url") or "")
+                rows.append((url, "脚本中发现的页面", "—", f"{url}\n来自：{item.get('from') or '-'}"))
+            return rows
+
+        for item in data.get("errors") or []:
+            url = str(item.get("url") or "")
+            rows.append((url, str(item.get("error") or "抓取失败"), "失败", url))
+        return rows
+
+    def _refresh_site_table(self) -> None:
+        table = getattr(self, "site_table", None)
+        if table is None:
+            return
+        rows = self._site_rows()
+        table.setRowCount(len(rows))
+        for r, (url, note, meta, tip) in enumerate(rows):
+            for c, value in enumerate((url, note, meta)):
+                item = QTableWidgetItem(str(value))
+                item.setToolTip(tip)
+                table.setItem(r, c, item)
+        table.resizeRowsToContents()
+
+    def _copy_site_address(self, url: str) -> None:
+        from PyQt5.QtWidgets import QApplication
+
+        if not url:
+            return
+        QApplication.clipboard().setText(url)
+        self.site_summary.setText(f"已复制：{url}")
+        QTimer.singleShot(2500, self._restore_site_summary)
+
+    def _restore_site_summary(self) -> None:
+        if not self._site_busy:
+            self.site_summary.setText(self._site_summary_text)
+
+    def _on_site_double_clicked(self, index: Any) -> None:
+        item = self.site_table.item(index.row(), 0)
+        if item is None:
+            return
+        url = item.text().strip()
+        if not url:
+            return
+        if self._site_view == "pages":
+            QDesktopServices.openUrl(QUrl(url))
+            return
+        self._copy_site_address(url)
+
+    def copy_selected_site_url(self) -> None:
+        row = self.site_table.currentRow()
+        item = self.site_table.item(row, 0) if row >= 0 else None
+        if item is None or not item.text().strip():
+            Toast.info(self, "先选一行", "在表格里点一行，再复制地址。")
+            return
+        self._copy_site_address(item.text().strip())
 
     def _matches(self, entry: tuple) -> bool:
         keyword = self.search.text().strip().lower()
@@ -543,6 +799,20 @@ class DeveloperPage(QWidget):
 
     def on_theme_changed(self) -> None:
         pass
+
+
+def _format_size(value: Any) -> str:
+    try:
+        size = int(value or 0)
+    except (TypeError, ValueError):
+        return "—"
+    if size <= 0:
+        return "—"
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} KB"
+    return f"{size / (1024 * 1024):.1f} MB"
 
 
 def _kind_of(value: Any) -> str:

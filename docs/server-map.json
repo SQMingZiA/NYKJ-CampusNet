@@ -1,0 +1,1149 @@
+[
+  {
+    "ok": true,
+    "origin": "http://10.100.2.2",
+    "entry": "http://10.100.2.2/",
+    "elapsed": 0.65,
+    "pages": [
+      {
+        "url": "http://10.100.2.2/",
+        "status": 200,
+        "size": 26478,
+        "content_type": "text/html",
+        "title": "个人中心",
+        "depth": 0
+      },
+      {
+        "url": "http://10.100.2.2/account.html",
+        "status": 200,
+        "size": 13906,
+        "content_type": "text/html",
+        "title": "账户信息",
+        "depth": 1
+      },
+      {
+        "url": "http://10.100.2.2/after_service.html",
+        "status": 200,
+        "size": 19512,
+        "content_type": "text/html",
+        "title": "售后服务",
+        "depth": 1
+      },
+      {
+        "url": "http://10.100.2.2/bill.html",
+        "status": 200,
+        "size": 8888,
+        "content_type": "text/html",
+        "title": "账单",
+        "depth": 1
+      },
+      {
+        "url": "http://10.100.2.2/bind_service.html",
+        "status": 200,
+        "size": 10895,
+        "content_type": "text/html",
+        "title": "绑定运营商",
+        "depth": 1
+      },
+      {
+        "url": "http://10.100.2.2/cardUser.html",
+        "status": 200,
+        "size": 31133,
+        "content_type": "text/html",
+        "title": "登陆",
+        "depth": 1
+      },
+      {
+        "url": "http://10.100.2.2/change_passwd.html",
+        "status": 200,
+        "size": 13298,
+        "content_type": "text/html",
+        "title": "修改密码",
+        "depth": 1
+      },
+      {
+        "url": "http://10.100.2.2/change_room.html",
+        "status": 200,
+        "size": 10330,
+        "content_type": "text/html",
+        "title": "自助换房",
+        "depth": 1
+      },
+      {
+        "url": "http://10.100.2.2/fault.html",
+        "status": 200,
+        "size": 10250,
+        "content_type": "text/html",
+        "title": "故障报修",
+        "depth": 1
+      },
+      {
+        "url": "http://10.100.2.2/flow.html",
+        "status": 200,
+        "size": 10618,
+        "content_type": "text/html",
+        "title": "流量查询",
+        "depth": 1
+      },
+      {
+        "url": "http://10.100.2.2/index.html",
+        "status": 200,
+        "size": 26478,
+        "content_type": "text/html",
+        "title": "个人中心",
+        "depth": 1
+      },
+      {
+        "url": "http://10.100.2.2/invoice.html",
+        "status": 200,
+        "size": 15196,
+        "content_type": "text/html",
+        "title": "发票开具",
+        "depth": 1
+      },
+      {
+        "url": "http://10.100.2.2/notice.html",
+        "status": 200,
+        "size": 4409,
+        "content_type": "text/html",
+        "title": "通知公告",
+        "depth": 1
+      },
+      {
+        "url": "http://10.100.2.2/online.html",
+        "status": 200,
+        "size": 8824,
+        "content_type": "text/html",
+        "title": "上网记录",
+        "depth": 1
+      },
+      {
+        "url": "http://10.100.2.2/online_devices.html",
+        "status": 200,
+        "size": 9892,
+        "content_type": "text/html",
+        "title": "在线设备",
+        "depth": 1
+      },
+      {
+        "url": "http://10.100.2.2/order.html",
+        "status": 200,
+        "size": 11959,
+        "content_type": "text/html",
+        "title": "订单记录",
+        "depth": 1
+      },
+      {
+        "url": "http://10.100.2.2/pause_order.html",
+        "status": 200,
+        "size": 17135,
+        "content_type": "text/html",
+        "title": "暂停订单",
+        "depth": 1
+      },
+      {
+        "url": "http://10.100.2.2/product.html",
+        "status": 200,
+        "size": 5337,
+        "content_type": "text/html",
+        "title": "自助系统",
+        "depth": 1
+      },
+      {
+        "url": "http://10.100.2.2/product_about.html",
+        "status": 200,
+        "size": 18837,
+        "content_type": "text/html",
+        "title": "产品介绍",
+        "depth": 1
+      },
+      {
+        "url": "http://10.100.2.2/product_intro.html",
+        "status": 200,
+        "size": 5755,
+        "content_type": "text/html",
+        "title": "套餐介绍",
+        "depth": 1
+      },
+      {
+        "url": "http://10.100.2.2/repair.html",
+        "status": 200,
+        "size": 4425,
+        "content_type": "text/html",
+        "title": "报事报修",
+        "depth": 1
+      },
+      {
+        "url": "http://10.100.2.2/billDetail.html?id=",
+        "status": 200,
+        "size": 8205,
+        "content_type": "text/html",
+        "title": "账单详情",
+        "depth": 2
+      },
+      {
+        "url": "http://10.100.2.2/find_pwd.html",
+        "status": 200,
+        "size": 20609,
+        "content_type": "text/html",
+        "title": "重设密码",
+        "depth": 2
+      },
+      {
+        "url": "http://10.100.2.2/mianze.html",
+        "status": 200,
+        "size": 6058,
+        "content_type": "text/html",
+        "title": "自助系统",
+        "depth": 2
+      },
+      {
+        "url": "http://10.100.2.2/user_work_list.html?work_order_status=0",
+        "status": 200,
+        "size": 11509,
+        "content_type": "text/html",
+        "title": "工单列表",
+        "depth": 2
+      },
+      {
+        "url": "http://10.100.2.2/user_work_list.html?work_order_status=1",
+        "status": 200,
+        "size": 11509,
+        "content_type": "text/html",
+        "title": "工单列表",
+        "depth": 2
+      },
+      {
+        "url": "http://10.100.2.2/user_work_list.html?work_order_status=2",
+        "status": 200,
+        "size": 11509,
+        "content_type": "text/html",
+        "title": "工单列表",
+        "depth": 2
+      },
+      {
+        "url": "http://10.100.2.2/yinsi.html",
+        "status": 200,
+        "size": 10444,
+        "content_type": "text/html",
+        "title": "自助系统",
+        "depth": 2
+      },
+      {
+        "url": "http://10.100.2.2/admin_login.html",
+        "status": 200,
+        "size": 15263,
+        "content_type": "text/html",
+        "title": "施工人员登陆",
+        "depth": 3
+      },
+      {
+        "url": "http://10.100.2.2/login.html",
+        "status": 200,
+        "size": 5951,
+        "content_type": "text/html",
+        "title": "自助系统",
+        "depth": 3
+      }
+    ],
+    "assets": [
+      {
+        "url": "http://10.100.2.2/image/icon-account.png",
+        "ext": ".png",
+        "refs": 5,
+        "from": "http://10.100.2.2/cardUser.html"
+      },
+      {
+        "url": "http://10.100.2.2/image/icon-back.png",
+        "ext": ".png",
+        "refs": 19,
+        "from": "http://10.100.2.2/account.html"
+      },
+      {
+        "url": "http://10.100.2.2/image/icon-bill.png",
+        "ext": ".png",
+        "refs": 3,
+        "from": "http://10.100.2.2/"
+      },
+      {
+        "url": "http://10.100.2.2/image/icon-bind-service.png",
+        "ext": ".png",
+        "refs": 2,
+        "from": "http://10.100.2.2/"
+      },
+      {
+        "url": "http://10.100.2.2/image/icon-change-passwd.png",
+        "ext": ".png",
+        "refs": 2,
+        "from": "http://10.100.2.2/"
+      },
+      {
+        "url": "http://10.100.2.2/image/icon-fault.png",
+        "ext": ".png",
+        "refs": 2,
+        "from": "http://10.100.2.2/"
+      },
+      {
+        "url": "http://10.100.2.2/image/icon-flow.png",
+        "ext": ".png",
+        "refs": 2,
+        "from": "http://10.100.2.2/"
+      },
+      {
+        "url": "http://10.100.2.2/image/icon-mobile.png",
+        "ext": ".png",
+        "refs": 2,
+        "from": "http://10.100.2.2/cardUser.html"
+      },
+      {
+        "url": "http://10.100.2.2/image/icon-more.png",
+        "ext": ".png",
+        "refs": 1,
+        "from": "http://10.100.2.2/online.html"
+      },
+      {
+        "url": "http://10.100.2.2/image/icon-net-log.png",
+        "ext": ".png",
+        "refs": 2,
+        "from": "http://10.100.2.2/"
+      },
+      {
+        "url": "http://10.100.2.2/image/icon-notice.png",
+        "ext": ".png",
+        "refs": 2,
+        "from": "http://10.100.2.2/"
+      },
+      {
+        "url": "http://10.100.2.2/image/icon-offline.png",
+        "ext": ".png",
+        "refs": 2,
+        "from": "http://10.100.2.2/"
+      },
+      {
+        "url": "http://10.100.2.2/image/icon-order.png",
+        "ext": ".png",
+        "refs": 2,
+        "from": "http://10.100.2.2/"
+      },
+      {
+        "url": "http://10.100.2.2/image/icon-password.png",
+        "ext": ".png",
+        "refs": 4,
+        "from": "http://10.100.2.2/cardUser.html"
+      },
+      {
+        "url": "http://10.100.2.2/image/icon-product-intro.png",
+        "ext": ".png",
+        "refs": 2,
+        "from": "http://10.100.2.2/"
+      },
+      {
+        "url": "http://10.100.2.2/image/icon-product.png",
+        "ext": ".png",
+        "refs": 2,
+        "from": "http://10.100.2.2/"
+      },
+      {
+        "url": "http://10.100.2.2/image/icon-service.png",
+        "ext": ".png",
+        "refs": 4,
+        "from": "http://10.100.2.2/"
+      },
+      {
+        "url": "http://10.100.2.2/image/icon-user.png",
+        "ext": ".png",
+        "refs": 2,
+        "from": "http://10.100.2.2/"
+      },
+      {
+        "url": "http://10.100.2.2/image/icon-user1.png",
+        "ext": ".png",
+        "refs": 2,
+        "from": "http://10.100.2.2/"
+      },
+      {
+        "url": "http://10.100.2.2/image/icon-wechat.png",
+        "ext": ".png",
+        "refs": 2,
+        "from": "http://10.100.2.2/"
+      },
+      {
+        "url": "http://10.100.2.2/image/icon-zt-log.png",
+        "ext": ".png",
+        "refs": 2,
+        "from": "http://10.100.2.2/"
+      },
+      {
+        "url": "http://10.100.2.2/image/info-bg.png",
+        "ext": ".png",
+        "refs": 1,
+        "from": "http://10.100.2.2/flow.html"
+      },
+      {
+        "url": "http://10.100.2.2/image/loginout.png",
+        "ext": ".png",
+        "refs": 2,
+        "from": "http://10.100.2.2/"
+      },
+      {
+        "url": "http://10.100.2.2/image/logo2.png",
+        "ext": ".png",
+        "refs": 1,
+        "from": "http://10.100.2.2/cardUser.html"
+      },
+      {
+        "url": "http://10.100.2.2/js/common.js",
+        "ext": ".js",
+        "refs": 19,
+        "from": "http://10.100.2.2/cardUser.html"
+      },
+      {
+        "url": "http://10.100.2.2/js/common.js?2",
+        "ext": ".js",
+        "refs": 2,
+        "from": "http://10.100.2.2/account.html"
+      },
+      {
+        "url": "http://10.100.2.2/js/common.js?v=1",
+        "ext": ".js",
+        "refs": 5,
+        "from": "http://10.100.2.2/"
+      },
+      {
+        "url": "http://10.100.2.2/js/common.js?v=2",
+        "ext": ".js",
+        "refs": 3,
+        "from": "http://10.100.2.2/product.html"
+      },
+      {
+        "url": "http://10.100.2.2/js/jquery-3.6.0.min.js",
+        "ext": ".js",
+        "refs": 28,
+        "from": "http://10.100.2.2/"
+      },
+      {
+        "url": "http://10.100.2.2/js/jquery.i18n.min.js",
+        "ext": ".js",
+        "refs": 22,
+        "from": "http://10.100.2.2/"
+      },
+      {
+        "url": "http://10.100.2.2/js/layer/layer.js",
+        "ext": ".js",
+        "refs": 19,
+        "from": "http://10.100.2.2/"
+      },
+      {
+        "url": "http://10.100.2.2/js/probe.js?page=login",
+        "ext": ".js",
+        "refs": 1,
+        "from": "http://10.100.2.2/cardUser.html"
+      },
+      {
+        "url": "http://10.100.2.2/js/self.js?1",
+        "ext": ".js",
+        "refs": 18,
+        "from": "http://10.100.2.2/account.html"
+      },
+      {
+        "url": "http://10.100.2.2/js/self.js?2",
+        "ext": ".js",
+        "refs": 3,
+        "from": "http://10.100.2.2/"
+      },
+      {
+        "url": "http://10.100.2.2/js/toast.js",
+        "ext": ".js",
+        "refs": 18,
+        "from": "http://10.100.2.2/"
+      },
+      {
+        "url": "http://10.100.2.2/js/vue.js",
+        "ext": ".js",
+        "refs": 4,
+        "from": "http://10.100.2.2/fault.html"
+      },
+      {
+        "url": "http://10.100.2.2/plugin/mobiscroll/mobiscroll.custom-2.6.2.min.css",
+        "ext": ".css",
+        "refs": 1,
+        "from": "http://10.100.2.2/online.html"
+      },
+      {
+        "url": "http://10.100.2.2/plugin/mobiscroll/mobiscroll.custom-2.6.2.min.js",
+        "ext": ".js",
+        "refs": 1,
+        "from": "http://10.100.2.2/online.html"
+      },
+      {
+        "url": "http://10.100.2.2/style/self.css",
+        "ext": ".css",
+        "refs": 7,
+        "from": "http://10.100.2.2/fault.html"
+      },
+      {
+        "url": "http://10.100.2.2/style/toast.css",
+        "ext": ".css",
+        "refs": 5,
+        "from": "http://10.100.2.2/fault.html"
+      }
+    ],
+    "apis": [
+      {
+        "url": "http://10.100.2.2/api/Config/getWechatShow",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/config/getWechatAppId",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfbase/captcha",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfbase/checkCard",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfbase/checkIsLogin",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfbase/findPwd",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfbase/findPwdByEmail",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfbase/findPwdType",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfbase/getBottomWord",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfbase/getEmailCode",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfbase/getEscapeClauseAddress",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfbase/getFindPwdVerifyFields",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfbase/getMenus",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfbase/getPrivacyPolicyAddress",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfbase/getSystemTitleStyle",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfbase/getUserPasswordIntensity",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfbase/login",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfbase/probe",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfbase/smsCode",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfbase/smsCode?r=",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfbase/useCard",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfbase/vcode",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfbase/vcode_findpwd",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfnet/billDetail",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfnet/billList",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfnet/downLine",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfnet/downOneDevice",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfnet/flowInfo",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfnet/getOnlineDevices",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfnet/netLog",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfnet/orderInfo",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfuser/accountInfo",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfuser/bindOperator",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfuser/bindWechat",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfuser/changeRoom",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfuser/getBindProxyInfo",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfuser/getInvoice",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfuser/getNotice",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfuser/getProductIntroByUserId",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfuser/getRepair",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfuser/getRoomList",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfuser/getUserPause",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfuser/getWorkOrderType",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfuser/modPwd",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfuser/restoreUserPause",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfuser/saveInvoice",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfuser/setUserPause",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfuser/subWorkOrder",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfuser/unbindWechat",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/selfuser/workOrderlist",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2/api/wechat/codeAuth",
+        "status": 0,
+        "size": 0
+      }
+    ],
+    "discovered": [
+      {
+        "url": "http://10.100.2.2/js/login.html",
+        "from": "http://10.100.2.2/js/self.js?2"
+      }
+    ],
+    "errors": [],
+    "stats": {
+      "pages": 30,
+      "assets": 40,
+      "apis": 51,
+      "errors": 0,
+      "visited": 30,
+      "discovered": 1
+    }
+  },
+  {
+    "ok": true,
+    "origin": "http://10.100.2.2:9090",
+    "entry": "http://10.100.2.2:9090/",
+    "elapsed": 0.23,
+    "pages": [
+      {
+        "url": "http://10.100.2.2:9090/",
+        "status": 200,
+        "size": 57151,
+        "content_type": "text/html;charset=utf-8",
+        "title": "认证登录",
+        "depth": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/file",
+        "status": 404,
+        "size": 564,
+        "content_type": "text/html",
+        "title": "404 Not Found",
+        "depth": 1
+      },
+      {
+        "url": "http://10.100.2.2:9090/image/jpeg",
+        "status": 404,
+        "size": 564,
+        "content_type": "text/html",
+        "title": "404 Not Found",
+        "depth": 1
+      }
+    ],
+    "assets": [
+      {
+        "url": "http://10.100.2.2:9090/&lt;!&ndash;$root&ndash;&gt;js/get.ip.js",
+        "ext": ".js",
+        "refs": 1,
+        "from": "http://10.100.2.2:9090/"
+      },
+      {
+        "url": "http://10.100.2.2:9090/&lt;!&ndash;$root&ndash;&gt;js/getPwd.js?t=1576923734",
+        "ext": ".js",
+        "refs": 1,
+        "from": "http://10.100.2.2:9090/"
+      },
+      {
+        "url": "http://10.100.2.2:9090/templates/auth/NYKJ3/css/style1.css",
+        "ext": ".css",
+        "refs": 1,
+        "from": "http://10.100.2.2:9090/"
+      },
+      {
+        "url": "http://10.100.2.2:9090/templates/auth/NYKJ3/images/1.jpeg",
+        "ext": ".jpeg",
+        "refs": 1,
+        "from": "http://10.100.2.2:9090/"
+      },
+      {
+        "url": "http://10.100.2.2:9090/templates/auth/NYKJ3/images/5b34cec562111.png",
+        "ext": ".png",
+        "refs": 1,
+        "from": "http://10.100.2.2:9090/"
+      },
+      {
+        "url": "http://10.100.2.2:9090/templates/auth/NYKJ3/images/66626ddf4a855.png",
+        "ext": ".png",
+        "refs": 1,
+        "from": "http://10.100.2.2:9090/"
+      },
+      {
+        "url": "http://10.100.2.2:9090/templates/auth/NYKJ3/images/68d6b10cb051c.png",
+        "ext": ".png",
+        "refs": 1,
+        "from": "http://10.100.2.2:9090/"
+      },
+      {
+        "url": "http://10.100.2.2:9090/templates/auth/NYKJ3/images/account.png",
+        "ext": ".png",
+        "refs": 1,
+        "from": "http://10.100.2.2:9090/"
+      },
+      {
+        "url": "http://10.100.2.2:9090/templates/auth/NYKJ3/images/idcard.png",
+        "ext": ".png",
+        "refs": 1,
+        "from": "http://10.100.2.2:9090/"
+      },
+      {
+        "url": "http://10.100.2.2:9090/templates/auth/NYKJ3/images/oneclick.png",
+        "ext": ".png",
+        "refs": 1,
+        "from": "http://10.100.2.2:9090/"
+      },
+      {
+        "url": "http://10.100.2.2:9090/templates/auth/NYKJ3/images/passport.png",
+        "ext": ".png",
+        "refs": 1,
+        "from": "http://10.100.2.2:9090/"
+      },
+      {
+        "url": "http://10.100.2.2:9090/templates/auth/NYKJ3/images/passport2.png",
+        "ext": ".png",
+        "refs": 1,
+        "from": "http://10.100.2.2:9090/"
+      },
+      {
+        "url": "http://10.100.2.2:9090/templates/auth/NYKJ3/images/phone.png",
+        "ext": ".png",
+        "refs": 1,
+        "from": "http://10.100.2.2:9090/"
+      },
+      {
+        "url": "http://10.100.2.2:9090/templates/auth/NYKJ3/images/pwd.png",
+        "ext": ".png",
+        "refs": 1,
+        "from": "http://10.100.2.2:9090/"
+      },
+      {
+        "url": "http://10.100.2.2:9090/templates/auth/NYKJ3/images/visitor.png",
+        "ext": ".png",
+        "refs": 1,
+        "from": "http://10.100.2.2:9090/"
+      },
+      {
+        "url": "http://10.100.2.2:9090/templates/auth/NYKJ3/images/wx.png",
+        "ext": ".png",
+        "refs": 1,
+        "from": "http://10.100.2.2:9090/"
+      },
+      {
+        "url": "http://10.100.2.2:9090/templates/auth/NYKJ3/images/wx2.png",
+        "ext": ".png",
+        "refs": 1,
+        "from": "http://10.100.2.2:9090/"
+      },
+      {
+        "url": "http://10.100.2.2:9090/templates/auth/NYKJ3/js/getPwd_new.js?t=1",
+        "ext": ".js",
+        "refs": 1,
+        "from": "http://10.100.2.2:9090/"
+      },
+      {
+        "url": "http://10.100.2.2:9090/templates/auth/NYKJ3/js/jquery-3.6.0.min.js",
+        "ext": ".js",
+        "refs": 1,
+        "from": "http://10.100.2.2:9090/"
+      },
+      {
+        "url": "http://10.100.2.2:9090/templates/auth/NYKJ3/js/login.js?v=456789",
+        "ext": ".js",
+        "refs": 1,
+        "from": "http://10.100.2.2:9090/"
+      },
+      {
+        "url": "http://10.100.2.2:9090/templates/auth/NYKJ3/js/probe.js?page=portal",
+        "ext": ".js",
+        "refs": 1,
+        "from": "http://10.100.2.2:9090/"
+      },
+      {
+        "url": "http://10.100.2.2:9090/templates/auth/NYKJ3/js/qrcode.js?v=112233445566",
+        "ext": ".js",
+        "refs": 1,
+        "from": "http://10.100.2.2:9090/"
+      }
+    ],
+    "apis": [
+      {
+        "url": "http://10.100.2.2:9090/api/portal/aaaCheckMobile",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/portal/aaaSend",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/portal/aaaVerify",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/portal/autoCreateAccount",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/portal/checkEmptyPasswordUser",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/portal/recognizeIdcard",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/portal/recognizePassport",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/prepass/index",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/selfbase/auth_process",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/selfbase/checkAliasUsername",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/selfbase/checkMacIsOnline",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/selfbase/checkUserOnline",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/selfbase/checkUserOnline2",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/selfbase/checkUserStatus",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/selfbase/downLine",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/selfbase/downLinePortal",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/selfbase/downLineUser",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/selfbase/getMacRegistNum",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/selfbase/getPortalLang",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/selfbase/getQueryParams",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/selfbase/getUserPasswordIntensity",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/selfbase/getWxAppletAuthUrlLink",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/selfbase/loginCheck",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/selfbase/pcBindingMac",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/selfbase/portalCount",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/selfbase/portalLoginCheckUser",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/selfbase/portal_count",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/selfbase/preDebug",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/selfbase/probe",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/selfbase/saveUserPortalUrl",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/selfbase/smsCode",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/selfbase/smsCode?r=",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/visitor/getVisitorAuthQrCode",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/visitor/getVisitorConfig",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/visitor/getVisitorStatus",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/visitor/sendSmsCode",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/wxwork/getQrCode",
+        "status": 0,
+        "size": 0
+      },
+      {
+        "url": "http://10.100.2.2:9090/api/wxwork/portalPcCheckLogin",
+        "status": 0,
+        "size": 0
+      }
+    ],
+    "discovered": [
+      {
+        "url": "http://10.100.2.2:9090/templates/auth/NYKJ3/js/image/png",
+        "from": "http://10.100.2.2:9090/templates/auth/NYKJ3/js/qrcode.js?v=112233445566"
+      },
+      {
+        "url": "http://10.100.2.2:9090/templates/auth/NYKJ3/js/success.php",
+        "from": "http://10.100.2.2:9090/templates/auth/NYKJ3/js/login.js?v=456789"
+      },
+      {
+        "url": "http://10.100.2.2:9090/templates/auth/NYKJ3/js/success.php?",
+        "from": "http://10.100.2.2:9090/templates/auth/NYKJ3/js/login.js?v=456789"
+      },
+      {
+        "url": "http://10.100.2.2:9090/templates/auth/NYKJ3/js/success.php?wlanapmac=",
+        "from": "http://10.100.2.2:9090/templates/auth/NYKJ3/js/login.js?v=456789"
+      }
+    ],
+    "errors": [],
+    "stats": {
+      "pages": 3,
+      "assets": 22,
+      "apis": 38,
+      "errors": 0,
+      "visited": 3,
+      "discovered": 4
+    }
+  }
+]

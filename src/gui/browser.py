@@ -202,6 +202,29 @@ def prepare_webengine() -> None:
         return
 
 
+def guard_verdict(*, seq: int, nav_seq: int, busy: bool, current: str, failed: str,
+                  error_code: int) -> str:
+    """判断一次「加载失败」到底要不要真的显示错误页。
+
+    Chromium 在重定向、页面内跳转、下载等场景会把被打断的那次加载记成
+    ``ok=False``，用户真正看到的是随后那次加载。返回：
+
+    * ``"newer"``：期间又开始了新的加载，交给它收尾；
+    * ``"recovered"``：地址已经变了，说明跳转成功；
+    * ``"aborted"``：``ERR_ABORTED``，页面通常已经渲染出来；
+    * ``"failed"``：确实打不开，该显示错误页。
+    """
+    if seq != nav_seq:
+        return "newer"
+    if busy:
+        return "newer"
+    if current and failed and current != failed:
+        return "recovered"
+    if error_code == -3:
+        return "aborted"
+    return "failed"
+
+
 class BrowserWindow(QWidget):
     """一个自带地址栏与导航按钮的内置浏览器窗口。"""
 
@@ -223,6 +246,9 @@ class BrowserWindow(QWidget):
         self._certificate_host = ""
         self._last_error_code = 0
         self._last_error_text = ""
+        self._nav_seq = 0
+        self._fail_pending = False
+        self._error_page_pending = False
 
         self.setWindowFlags(Qt.Window)
         self.setWindowTitle(f"校园网认证 · {self._app_title()}")
@@ -281,6 +307,8 @@ class BrowserWindow(QWidget):
         self.url_edit.setPlaceholderText("输入 Portal 地址，例如 http://10.100.2.2:9090/")
         self.url_edit.setClearButtonEnabled(True)
         self.url_edit.setMinimumWidth(260)
+        # 工具条上其它控件都是 30px 高，地址栏跟着走，否则一行里高低不齐。
+        self.url_edit.setFixedHeight(30)
         prefix_action = self.url_edit.addAction(
             icons.icon("link", 16, theme.color("text_secondary")),
             QLineEdit.LeadingPosition,
@@ -592,6 +620,8 @@ class BrowserWindow(QWidget):
         self._showing_error = False
         self._ignore_next_load = False
         self._stop_requested = False
+        self._fail_pending = False
+        self._error_page_pending = False
         self._failed_url = ""
         self._last_error_code = 0
         self._last_error_text = ""
@@ -693,57 +723,114 @@ class BrowserWindow(QWidget):
     # ------------------------------------------------------------ 加载信号
 
     def _on_load_started(self) -> None:
+        self._nav_seq += 1
         if self._ignore_next_load:
             self._ignore_next_load = False
             return
         if self._showing_error:
             self._showing_error = False
+        self._fail_pending = False
         self._failed_url = ""
         self._stop_requested = False
         self._last_error_code = 0
         self._last_error_text = ""
         self._set_loading(True)
 
+    def _url_now(self) -> str:
+        """当前视图地址；拿不到就退回地址栏文本。"""
+        if self.view is not None:
+            try:
+                current = self.view.url().toString()
+                if current and current != "about:blank":
+                    return current
+            except Exception:
+                pass
+        return self.url_edit.text().strip()
+
+    def _page_title(self) -> str:
+        if self.view is None:
+            return ""
+        try:
+            return str(self.view.title() or "")
+        except Exception:
+            return ""
+
     def _on_load_finished(self, ok: bool) -> None:
         self._ignore_next_load = False
         if self.view is None:
             return
 
-        if self._showing_error:
-            # 这条信号来自内嵌错误页自身，保留「加载失败」状态。
-            self._set_loading(False)
-            self._set_status("failed", self._failed_url or "页面打不开")
-            return
-
-        url = self.url_edit.text().strip()
-        try:
-            current = self.view.url().toString()
-            if current and current != "about:blank":
-                url = current
-        except Exception:
-            pass
-
-        if not ok:
-            self._certificate_warned = False
-            if self._stop_requested:
-                self._stop_requested = False
-                self._failed_url = ""
+        if ok:
+            self._fail_pending = False
+            if self._error_page_pending:
+                # 这条信号来自内嵌错误页自身，保留「加载失败」状态。
+                self._error_page_pending = False
                 self._set_loading(False)
-                self._set_status("idle", "已停止加载")
+                self._set_status("failed", self._failed_url or "页面打不开")
                 return
-            self._failed_url = url or self._home_url()
-            detail = self._error_detail()
-            self._set_loading(False)
-            self._set_status("failed", f"{self._failed_url}（{detail}）" if detail else self._failed_url)
-            self._update_title("页面打不开")
-            self._show_error_page(self._failed_url, detail)
+            if self._showing_error:
+                # 用户从错误页里点链接跳到了真实页面：退出错误态。
+                self._showing_error = False
+                self._failed_url = ""
+            self._finish_success()
             return
 
-        title = ""
+        self._certificate_warned = False
+        if self._stop_requested:
+            self._stop_requested = False
+            self._failed_url = ""
+            self._set_loading(False)
+            self._set_status("idle", "已停止加载")
+            return
+
+        # Chromium 在重定向、页面内 document.location 跳转等场景会把被打断
+        # 的那次加载记成 ok=False（ERR_ABORTED），用户真正看到的是随后那次
+        # 加载。所以这里先不盖错误页，350ms 后再确认：期间只要又开始了新的
+        # 加载，或者视图已经跳到了别的地址，就把控制权交还给真实页面。
+        self._failed_url = self._url_now() or self._home_url()
+        self._fail_pending = True
+        detail = self._error_detail()
+        self._set_loading(False)
+        seq = self._nav_seq
+        QTimer.singleShot(350, lambda: self._confirm_load_failure(seq, detail))
+
+    def _confirm_load_failure(self, seq: int, detail: str = "") -> None:
+        """延迟确认一次失败：被打断的加载不算失败。"""
+        self._fail_pending = False
+        if self.view is None or self._showing_error:
+            return
         try:
-            title = self.view.title()
+            busy = self.view.isLoading()
         except Exception:
-            pass
+            busy = False
+
+        current = self._url_now()
+        failed = self._failed_url
+        verdict = guard_verdict(
+            seq=seq,
+            nav_seq=self._nav_seq,
+            busy=busy,
+            current=current,
+            failed=failed,
+            error_code=self._last_error_code,
+        )
+        if verdict in ("newer", "recovered", "aborted"):
+            if verdict != "newer":
+                # 页面其实已经渲染出来（或已跳到新地址），别盖掉真实内容。
+                self._failed_url = ""
+                title = self._page_title()
+                self._set_status("loaded", title or current)
+                self._update_title(title)
+            return
+
+        self._set_loading(False)
+        self._set_status("failed", f"{failed}（{detail}）" if detail else failed)
+        self._update_title("页面打不开")
+        self._show_error_page(failed, detail)
+
+    def _finish_success(self) -> None:
+        url = self._url_now()
+        title = self._page_title()
         self._failed_url = ""
         self._render_recovered = False
         detail = title or url
@@ -830,6 +917,7 @@ class BrowserWindow(QWidget):
         if self.view is None:
             return
         self._showing_error = True
+        self._error_page_pending = True
         self._ignore_next_load = True
         self.view.setHtml(self._error_html(url, detail), QUrl("about:blank"))
 
