@@ -29,10 +29,17 @@ class Task(QRunnable):
         try:
             result = self.fn(*self.args, **self.kwargs)
         except Exception as exc:
-            self.signals.failed.emit(f"{type(exc).__name__}: {exc}\n{traceback.format_exc(limit=3)}")
+            self._emit("failed", f"{type(exc).__name__}: {exc}\n{traceback.format_exc(limit=3)}")
             return
         else:
-            self.signals.finished.emit(result)
+            self._emit("finished", result)
+
+    def _emit(self, name: str, value: Any) -> None:
+        """信号对象可能随窗口销毁，退出阶段再发信号会抛 RuntimeError。"""
+        try:
+            getattr(self.signals, name).emit(value)
+        except RuntimeError:
+            pass
 
 
 def run_async(fn: Callable[..., Any], *args: Any, on_done: Callable[[Any], None] | None = None, on_error: Callable[[str], None] | None = None, **kwargs: Any) -> Task:

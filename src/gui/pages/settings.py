@@ -7,9 +7,11 @@
 from __future__ import annotations
 
 import platform
+from pathlib import Path
 from typing import Any
 
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import QTimer, QUrl
+from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
@@ -21,9 +23,11 @@ from PyQt5.QtWidgets import (
 )
 from qfluentwidgets import (
     FluentIcon as FIF,
+    HyperlinkButton,
     LineEdit,
     PushButton,
     SettingCardGroup,
+    StrongBodyLabel,
     TableWidget,
 )
 
@@ -39,8 +43,32 @@ from ..widgets import (
     SpinRow,
     SwitchRow,
     TextRow,
+    body_label,
     scroll_page,
 )
+
+# 仓库地址：换成你自己的 GitHub 仓库即可。
+GITHUB_URL = "https://github.com/campusnet/CampusNet"
+
+# 设置页位于 <仓库根>/src/gui/pages/settings.py，向上四层即项目根目录。
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+# 第三方组件及其许可证（关于页展示用）。
+ACKNOWLEDGEMENTS = [
+    ('PyQt5 / Qt', 'GPLv3 / LGPLv3', 'https://www.qt.io/'),
+    (
+        'PyQt-Fluent-Widgets',
+        'GPLv3',
+        'https://github.com/zhiyiYo/PyQt-Fluent-Widgets',
+    ),
+    (
+        'PyQt-Frameless-Window',
+        'GPLv3',
+        'https://github.com/zhiyiYo/PyQt-Frameless-Window',
+    ),
+    ('pyqtgraph', 'MIT', 'https://www.pyqtgraph.org/'),
+    ('requests', 'Apache-2.0', 'https://requests.readthedocs.io/'),
+]
 
 DRIVERS = [
     ('自动识别', 'auto'),
@@ -71,6 +99,8 @@ class SettingsPage(QWidget):
         self._loose = []
         # 回填配置期间抑制控件信号
         self._loading = True
+        # 账户「保存并测试」流程进行中：按钮禁用并显示进度文案
+        self._saving = False
         # -- 构建界面 --
         self._build_ui()
         self.reload()
@@ -280,6 +310,12 @@ class SettingsPage(QWidget):
             suffix='秒',
             parent=traffic,
         )
+        self.traffic_only_row = SwitchRow(
+            FIF.WIFI,
+            '仅记录校园网流量',
+            '连的是手机热点、家里宽带时不写入历史与用量；关掉后任何网络环境都记账',
+            parent=traffic,
+        )
         self.quota_auto_row = SwitchRow(
             FIF.SYNC,
             '自动读取套餐额度',
@@ -304,7 +340,13 @@ class SettingsPage(QWidget):
             suffix='天',
             parent=traffic,
         )
-        for card in (self.interval_row, self.quota_auto_row, self.quota_row, self.retention_row):
+        for card in (
+            self.interval_row,
+            self.traffic_only_row,
+            self.quota_auto_row,
+            self.quota_row,
+            self.retention_row,
+        ):
             traffic.addSettingCard(card)
 
         export_row = ButtonRow(
@@ -330,6 +372,7 @@ class SettingsPage(QWidget):
             traffic,
             [
                 self.interval_row,
+                self.traffic_only_row,
                 self.quota_auto_row,
                 self.quota_row,
                 self.retention_row,
@@ -414,8 +457,8 @@ class SettingsPage(QWidget):
             ],
         )
 
-        # 维护与关于
-        maintenance = SettingCardGroup('维护与关于', self)
+        # 维护
+        maintenance = SettingCardGroup('维护', self)
         open_dir = ButtonRow(
             FIF.FOLDER,
             '数据目录',
@@ -435,8 +478,21 @@ class SettingsPage(QWidget):
         )
         reset_all.clicked.connect(self.reset_all)
         maintenance.addSettingCard(reset_all)
+        layout.addWidget(maintenance)
+        self._register(maintenance, [open_dir, reset_all])
 
-        self.about_card = Card('关于', parent=maintenance)
+        # 关于
+        self.about_card = Card(
+            '关于 CampusNet', '本机运行 · 数据不出网', parent=self
+        )
+        self.about_card.add(
+            body_label(
+                'CampusNet 是一个面向校园网的 Windows 桌面助手：自动连接、认证、'
+                '流量统计与网络诊断都在一个窗口里完成。',
+                parent=self.about_card,
+            )
+        )
+
         self.about_grid = KVGrid(
             [
                 ('version', '程序版本'),
@@ -450,8 +506,45 @@ class SettingsPage(QWidget):
             parent=self.about_card,
         )
         self.about_card.add(self.about_grid)
-        layout.addWidget(maintenance)
-        self._register(maintenance, [open_dir, reset_all])
+
+        links = QHBoxLayout()
+        links.setSpacing(8)
+        links.addWidget(body_label('许可证：MIT License', parent=self.about_card))
+        license_button = PushButton(FIF.CERTIFICATE, '查看 LICENSE', self.about_card)
+        license_button.setToolTip('打开项目根目录的 LICENSE 文件')
+        license_button.clicked.connect(self._open_license)
+        links.addWidget(license_button)
+
+        self.github_link = HyperlinkButton(
+            FIF.GITHUB,
+            GITHUB_URL,
+            '打开 GitHub 仓库',
+            parent=self.about_card,
+        )
+        self.github_link.setToolTip(GITHUB_URL)
+        links.addWidget(self.github_link)
+        links.addStretch(1)
+        self.about_card.add_layout(links)
+
+        self.about_card.add(StrongBodyLabel('开源致谢', self.about_card))
+        for name, license_name, url in ACKNOWLEDGEMENTS:
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            row.addWidget(
+                body_label(f'{name} — {license_name}', parent=self.about_card), 1
+            )
+            link = HyperlinkButton(url, '项目主页', self.about_card)
+            link.setToolTip(url)
+            row.addWidget(link, 0)
+            self.about_card.add_layout(row)
+
+        self.about_card.add(
+            body_label(
+                r'数据只保存在本机 %APPDATA%\CampusNet，不会上传到任何服务器。',
+                muted=True,
+                parent=self.about_card,
+            )
+        )
 
         layout.addWidget(self.about_card)
         self._loose.append(self.about_card)
@@ -555,6 +648,10 @@ class SettingsPage(QWidget):
             self.interval_row.changed,
             lambda v: self._save({'traffic_interval_ms': int(v) * 1000}),
         )
+        on(
+            self.traffic_only_row.changed,
+            lambda v: self._save({'traffic_only_campus': bool(v)}),
+        )
         on(self.quota_auto_row.changed, self._on_quota_auto)
         on(self.quota_row.changed, lambda v: self._save({'monthly_quota_gb': float(v)}))
         on(
@@ -610,6 +707,9 @@ class SettingsPage(QWidget):
         self.retry_delay_row.set_value(int((config.get('retry_delay_ms') or 8000) / 1000))
 
         self.interval_row.set_value(int((config.get('traffic_interval_ms') or 5000) / 1000))
+        self.traffic_only_row.set_checked(
+            bool(config.get('traffic_only_campus', True))
+        )
         auto_quota = bool(config.get('quota_auto', True))
         self.quota_auto_row.set_checked(auto_quota)
         self.quota_row.set_value(float(config.get('monthly_quota_gb') or 0))
@@ -649,12 +749,43 @@ class SettingsPage(QWidget):
             }
         )
 
-    def _save(self, patch: dict[str, Any]) -> None:
-        run_async(self.service.update_config, patch, on_done=self._on_saved)
+    def _save(
+        self,
+        patch: dict[str, Any],
+        on_done=None,
+        on_error=None,
+    ) -> None:
+        """异步写配置；保存失败时统一弹提示，避免界面静默丢设置。"""
+
+        def done(config: Any) -> None:
+            self._on_saved(config)
+            if on_done is not None:
+                on_done(config)
+
+        def failed(error: str) -> None:
+            Toast.error(self, '保存失败', str(error))
+            if on_error is not None:
+                on_error(error)
+
+        run_async(self.service.update_config, patch, on_done=done, on_error=failed)
 
     def _on_saved(self, config: Any) -> None:
         if isinstance(config, dict):
             self._config = config
+
+    def _open_license(self) -> None:
+        """打开项目根目录的 LICENSE；打包后找不到时回退到 GitHub。"""
+        path = PROJECT_ROOT / 'LICENSE'
+        if path.exists():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+        else:
+            QDesktopServices.openUrl(QUrl(f'{GITHUB_URL}/blob/main/LICENSE'))
+
+    def _finish_save(self) -> None:
+        """恢复账户保存按钮。"""
+        self._saving = False
+        self.save_account_row.set_text('保存并测试')
+        self.save_account_row.set_enabled(True)
 
     def _on_theme(self, value: str) -> None:
         self._save({'theme': value})
@@ -747,6 +878,8 @@ class SettingsPage(QWidget):
         self._save({'developer_mode': value})
 
     def save_and_test(self) -> None:
+        if self._saving:
+            return
         raw = self.username_row.text().strip()
         for bad in ('例如', '手机号', '学号', '校园卡', '请输入', '请填写'):
             if bad in raw:
@@ -771,13 +904,21 @@ class SettingsPage(QWidget):
         if password:
             patch['password'] = password
 
+        self._saving = True
+        self.save_account_row.set_enabled(False)
+        self.save_account_row.set_text('保存中…')
+
         def done(_config: Any) -> None:
             self.password_row.set_text('')
             self.password_row.edit.setPlaceholderText('已保存（留空则不修改）')
             Toast.info(self, '已保存', '正在测试认证…')
+            self.save_account_row.set_text('测试中…')
             self._test_login()
 
-        run_async(self.service.update_config, patch, on_done=done)
+        def failed(_error: str) -> None:
+            self._finish_save()
+
+        self._save(patch, on_done=done, on_error=failed)
 
     def _test_login(self) -> None:
         def done(result: Any) -> None:
@@ -800,8 +941,17 @@ class SettingsPage(QWidget):
                     '认证未成功',
                     message or '请检查账号密码，或用「打开认证页面」手动登录。',
                 )
+            self._finish_save()
 
-        run_async(lambda: self.service.tick(manual=True), on_done=done)
+        def failed(error: str) -> None:
+            Toast.error(self, '测试认证失败', str(error))
+            self._finish_save()
+
+        run_async(
+            lambda: self.service.tick(manual=True),
+            on_done=done,
+            on_error=failed,
+        )
 
     def add_ssid(self) -> None:
         value = self.ssid_edit.text().strip()
@@ -951,4 +1101,4 @@ def _app_version() -> str:
         from main import __version__
         return str(__version__)
     except Exception:
-        return '1.1.0'
+        return '1.2.0'

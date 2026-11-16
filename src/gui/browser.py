@@ -18,25 +18,34 @@
 
 from __future__ import annotations
 
+import html
 import os
 import sys
 
-from PyQt5.QtCore import Qt, QUrl, pyqtSignal
-from PyQt5.QtGui import QIcon
+from PyQt5.QtCore import QSettings, QSize, Qt, QUrl, pyqtSignal
+from PyQt5.QtGui import QIcon, QKeySequence
 from PyQt5.QtWidgets import (
+    QApplication,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QProgressBar,
     QPushButton,
+    QShortcut,
     QVBoxLayout,
     QWidget,
 )
+from qfluentwidgets import PrimaryPushButton
 
 from ..core.deps import resource_path
 
 from . import icons, theme
 from .widgets import body_label
+
+try:
+    from ..portal.selfbase import SELFPAGE
+except Exception:
+    SELFPAGE = "http://10.100.2.2"
 
 WEBENGINE_AVAILABLE = False
 WEBENGINE_ERROR = ""
@@ -47,11 +56,22 @@ try:
         QWebEngineView,
     )
 
+    class _InlineWebEngineView(QWebEngineView):
+        """所有 ``window.open`` / 目标为 _blank 的链接都在当前视图打开。
+
+        默认实现会另开一个没有地址栏的裸窗口，用户关掉后原窗口还会停在
+        旧页面上，体验很割裂。返回 ``self`` 就是让新页面直接在当前视图加载。
+        """
+
+        def createWindow(self, _type):  # noqa: N802 - Qt 命名
+            return self
+
     WEBENGINE_AVAILABLE = True
 except Exception as exc:
     QWebEngineView = None
     QWebEngineProfile = None
     QWebEngineSettings = None
+    _InlineWebEngineView = None
     WEBENGINE_ERROR = f"{type(exc).__name__}: {exc}"
 
 
@@ -66,7 +86,12 @@ def _configure_profile() -> None:
     try:
         from PyQt5.QtWidgets import QApplication
 
-        if QApplication.instance() is None:
+        app = QApplication.instance()
+        if app is None:
+            return
+        if app.platformName().lower() == "offscreen":
+            # 实测：离屏平台上访问 defaultProfile() 会直接崩溃（无 OpenGL
+            # 上下文）。冒烟测试不需要持久化 Cookie，直接跳过配置。
             return
     except Exception:
         return
@@ -130,52 +155,100 @@ class BrowserWindow(QWidget):
     def __init__(self, service=None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.service = service
-        self.setWindowTitle("校园网认证 · 内置浏览器")
+        self._loading = False
+        self._showing_error = False
+        self._ignore_next_load = False
+        self._stop_requested = False
+        self._failed_url = ""
+        self._shortcuts: list[QShortcut] = []
+
         self.setWindowFlags(Qt.Window)
-        self.resize(1000, 740)
+        self.setWindowTitle("校园网认证 · CampusNet")
         icon_path = resource_path("app.ico")
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
         _configure_profile()
         self._build_ui()
 
+        self.setMinimumSize(900, 600)
+        self.resize(1120, 760)
+        self._restore_geometry()
+        self._install_shortcuts()
+
+    # ------------------------------------------------------------------ 界面
+
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(theme.SPACE_MD, theme.SPACE_MD, theme.SPACE_MD, theme.SPACE_MD)
-        root.setSpacing(theme.SPACE_SM)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(6)
 
         bar = QHBoxLayout()
-        bar.setSpacing(theme.SPACE_XS)
+        bar.setSpacing(6)
 
-        def tool_button(icon_name: str, tooltip: str):
-            """IconButton"""
+        def tool_button(icon_name: str, tooltip: str) -> QPushButton:
+            """工具条上的小图标按钮（30×30，紧凑排列）。"""
             button = QPushButton()
             button.setObjectName("IconButton")
             button.setIcon(icons.icon(icon_name, 16, theme.color("text")))
+            button.setIconSize(QSize(16, 16))
             button.setToolTip(tooltip)
-            button.setFixedSize(32, 32)
+            button.setFixedSize(30, 30)
             return button
 
-        self.back_button = tool_button("back", "后退")
-        self.forward_button = tool_button("forward", "前进")
-        self.reload_button = tool_button("refresh", "刷新")
+        def entry_button(icon_name: str, text: str, tooltip: str) -> QPushButton:
+            """快捷入口按钮：自带文字，省掉额外的说明灰字。"""
+            button = QPushButton(text)
+            button.setIcon(icons.icon(icon_name, 15, theme.color("text")))
+            button.setIconSize(QSize(15, 15))
+            button.setToolTip(tooltip)
+            button.setFixedHeight(30)
+            return button
+
+        self.forward_button = tool_button("forward", "前进（Alt+Right）")
+        self.back_button = tool_button("back", "后退（Alt+Left）")
+        self.reload_button = tool_button("refresh", "刷新（F5）")
         self.home_button = tool_button("home", "回到认证页")
         self.open_external_button = tool_button("link", "用系统浏览器打开")
-        for button in (self.back_button, self.forward_button, self.reload_button, self.home_button):
+        for button in (self.forward_button, self.back_button, self.reload_button, self.home_button):
             bar.addWidget(button)
 
         self.url_edit = QLineEdit()
         self.url_edit.setPlaceholderText("输入 Portal 地址，例如 http://10.100.2.2:9090/")
         self.url_edit.setClearButtonEnabled(True)
+        self.url_edit.setMinimumWidth(260)
+        prefix_action = self.url_edit.addAction(
+            icons.icon("link", 16, theme.color("text_secondary")),
+            QLineEdit.LeadingPosition,
+        )
+        if prefix_action is not None:
+            prefix_action.setToolTip("当前页面地址")
         bar.addWidget(self.url_edit, 1)
 
-        self.auto_login_button = QPushButton("在本页自动填表登录")
+        self.status_label = QLabel()
+        self.status_label.setFixedSize(24, 24)
+        self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setPixmap(icons.pixmap("globe", 16, theme.color("text_muted")))
+        self.status_label.setToolTip("等待加载页面")
+        self.status_label.setAccessibleName("页面状态")
+        bar.addWidget(self.status_label)
+
+        self.portal_entry_button = entry_button("shield", "认证页", "打开校园网认证页")
+        self.selfpage_entry_button = entry_button("globe", "自助系统", "打开学校自助服务首页")
+        bar.addWidget(self.portal_entry_button)
+        bar.addWidget(self.selfpage_entry_button)
+
+        self.auto_login_button = PrimaryPushButton("自动填表登录")
         self.auto_login_button.setIcon(icons.icon("shield", 15, theme.color("text")))
+        self.auto_login_button.setIconSize(QSize(15, 15))
+        self.auto_login_button.setToolTip("把已保存的账号密码填进当前门户并尝试提交")
+        self.auto_login_button.setFixedHeight(30)
         bar.addWidget(self.auto_login_button)
 
         bar.addWidget(self.open_external_button)
         self.close_button = QPushButton("关闭")
         self.close_button.setIcon(icons.icon("close", 15, theme.color("text")))
+        self.close_button.setIconSize(QSize(15, 15))
+        self.close_button.setFixedHeight(30)
         bar.addWidget(self.close_button)
         root.addLayout(bar)
 
@@ -187,30 +260,60 @@ class BrowserWindow(QWidget):
         root.addWidget(self.progress)
 
         if WEBENGINE_AVAILABLE:
-            self.view = QWebEngineView(self)
+            self.view = _InlineWebEngineView(self)
             self.view.setMinimumHeight(400)
-            settings = self.view.settings()
-            settings.setAttribute(QWebEngineSettings.JavascriptEnabled, True)
-            settings.setAttribute(QWebEngineSettings.LocalStorageEnabled, True)
-            settings.setAttribute(QWebEngineSettings.JavascriptCanOpenWindows, True)
-            settings.setAttribute(QWebEngineSettings.PluginsEnabled, True)
+            if QApplication.platformName().lower() != "offscreen":
+                # 离屏平台访问 view.settings() 会触发默认 Profile 初始化并崩溃，
+                # 冒烟测试不需要这些设置，直接跳过。
+                settings = self.view.settings()
+                settings.setAttribute(QWebEngineSettings.JavascriptEnabled, True)
+                settings.setAttribute(QWebEngineSettings.LocalStorageEnabled, True)
+                settings.setAttribute(QWebEngineSettings.JavascriptCanOpenWindows, True)
+                settings.setAttribute(QWebEngineSettings.PluginsEnabled, True)
             root.addWidget(self.view, 1)
+            if QApplication.platformName().lower() == "offscreen":
+                # 离屏平台没有可用的 OpenGL 上下文，QWebEngineView 一旦 show()
+                # 会直接崩溃；冒烟测试只需要能构造窗口，因此这里保持视图隐藏。
+                # 页面与信号仍然正常创建，真实桌面平台不受影响。
+                self.view.hide()
             self._wire_webengine()
         else:
             self.view = None
             fallback = body_label(
                 f"内置浏览器不可用（缺少 PyQtWebEngine）。\n\n原因：{WEBENGINE_ERROR}"
-                "\n\n可以执行下面命令安装后重试：\n    pip install PyQtWebEngine\n\n或者点工具条最右侧的「用系统浏览器打开」临时顶上。"
+                "\n\n可以在命令行执行下面命令安装后重试：\n    pip install PyQtWebEngine\n\n"
+                "或者点工具条右侧的「用系统浏览器打开」临时顶上。"
             )
             fallback.setAlignment(Qt.AlignCenter)
             root.addWidget(fallback, 1)
+            for button in (
+                self.forward_button,
+                self.back_button,
+                self.reload_button,
+                self.home_button,
+                self.portal_entry_button,
+                self.selfpage_entry_button,
+                self.auto_login_button,
+                self.open_external_button,
+            ):
+                button.setEnabled(False)
+            self.url_edit.setEnabled(False)
+            self._set_status("failed", "缺少 PyQtWebEngine")
 
-        self.hint = body_label(
-            "提示：在这个窗口里手动登录后，回到主界面点「检测并登录」即可；Cookie 会保留，下次不用重复输入。",
-            muted=True,
-        )
-        self.hint.setStyleSheet(f"font-size: 12px; color: {theme.color('text_secondary')};")
-        root.addWidget(self.hint)
+    def _install_shortcuts(self) -> None:
+        """窗口级快捷键；在网页里输入时也不会和普通输入冲突。"""
+        bindings = [
+            ("Ctrl+L", self._focus_url),
+            ("F5", self._reload_page),
+            ("Alt+Left", self._go_back),
+            ("Alt+Right", self._go_forward),
+            ("Esc", self._hide_window),
+        ]
+        for sequence, slot in bindings:
+            shortcut = QShortcut(QKeySequence(sequence), self)
+            shortcut.setContext(Qt.WindowShortcut)
+            shortcut.activated.connect(slot)
+            self._shortcuts.append(shortcut)
 
     def _wire_webengine(self) -> None:
         self.view.urlChanged.connect(self._on_url_changed)
@@ -219,12 +322,85 @@ class BrowserWindow(QWidget):
 
         self.back_button.clicked.connect(self.view.back)
         self.forward_button.clicked.connect(self.view.forward)
-        self.reload_button.clicked.connect(self.view.reload)
+        self.reload_button.clicked.connect(self._on_reload_clicked)
         self.home_button.clicked.connect(lambda: self.open_url(self._home_url()))
-        self.url_edit.returnPressed.connect(lambda: self.open_url(self.url_edit.text().strip()))
+        self.portal_entry_button.clicked.connect(lambda: self.open_url(self._home_url()))
+        self.selfpage_entry_button.clicked.connect(lambda: self.open_url(SELFPAGE))
+        self.url_edit.returnPressed.connect(self._navigate_from_url)
         self.close_button.clicked.connect(self.close)
         self.open_external_button.clicked.connect(self._open_external)
         self.auto_login_button.clicked.connect(self._fill_and_submit)
+
+    # -------------------------------------------------------------- 窗口状态
+
+    def _restore_geometry(self) -> None:
+        try:
+            settings = QSettings("CampusNet", "Browser")
+            saved = settings.value("geometry")
+            if saved and self.restoreGeometry(saved):
+                return
+        except Exception:
+            pass
+        self._center_on_screen()
+
+    def _center_on_screen(self) -> None:
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            return
+        available = screen.availableGeometry()
+        frame = self.frameGeometry()
+        frame.moveCenter(available.center())
+        self.move(frame.topLeft())
+
+    def _save_geometry(self) -> None:
+        try:
+            settings = QSettings("CampusNet", "Browser")
+            settings.setValue("geometry", self.saveGeometry())
+        except Exception:
+            pass
+
+    def _hide_window(self) -> None:
+        self._save_geometry()
+        self.hide()
+
+    def _update_title(self, page_title: str = "") -> None:
+        title = (page_title or "").strip()
+        self.setWindowTitle(f"{title} · CampusNet" if title else "校园网认证 · CampusNet")
+
+    # ------------------------------------------------------------ 状态表达
+
+    def _set_status(self, state: str, detail: str = "") -> None:
+        """用地址栏右侧的小图标 + tooltip 表达状态，不再占用底部一行灰字。"""
+        detail = (detail or "").strip()
+        if state == "loading":
+            self.status_label.setPixmap(icons.pixmap("sync", 16, theme.color("accent")))
+            tooltip = "正在加载页面…"
+        elif state == "loaded":
+            self.status_label.setPixmap(icons.pixmap("globe", 16, theme.color("ok")))
+            tooltip = f"页面已加载：{detail}" if detail else "页面已加载"
+        elif state == "failed":
+            self.status_label.setPixmap(icons.pixmap("warning", 16, theme.color("error")))
+            tooltip = f"页面加载失败：{detail}" if detail else "页面加载失败"
+        else:
+            self.status_label.setPixmap(icons.pixmap("globe", 16, theme.color("text_muted")))
+            tooltip = detail or "等待加载页面"
+        self.status_label.setToolTip(tooltip)
+        self.status_label.setAccessibleName(tooltip)
+
+    def _set_loading(self, loading: bool) -> None:
+        self._loading = bool(loading)
+        if loading:
+            self.progress.setRange(0, 0)
+            self.progress.show()
+            self.reload_button.setIcon(icons.icon("close", 16, theme.color("text")))
+            self.reload_button.setToolTip("停止加载")
+            self._set_status("loading")
+            return
+        self.progress.hide()
+        self.reload_button.setIcon(icons.icon("refresh", 16, theme.color("text")))
+        self.reload_button.setToolTip("刷新（F5）")
+
+    # ---------------------------------------------------------------- 导航
 
     def _home_url(self) -> str:
         if self.service is not None:
@@ -240,13 +416,20 @@ class BrowserWindow(QWidget):
 
     def open_url(self, url: str) -> None:
         """打开指定地址。"""
+        url = (url or "").strip()
         if not url:
             url = self._home_url()
         if "://" not in url:
             url = "http://" + url
+        self._showing_error = False
+        self._ignore_next_load = False
+        self._stop_requested = False
+        self._failed_url = ""
         self.url_edit.setText(url)
         if self.view is not None:
             self.view.setUrl(QUrl(url))
+        else:
+            self._set_status("failed", WEBENGINE_ERROR or "缺少 PyQtWebEngine")
 
     def open_portal(self, status: dict | None = None) -> str:
         """打开当前捕获到的 Portal 地址（没有就用配置 / 默认地址）。"""
@@ -256,28 +439,163 @@ class BrowserWindow(QWidget):
         self.open_url(url)
         return url
 
+    def _navigate_from_url(self) -> None:
+        self.url_edit.selectAll()
+        self.open_url(self.url_edit.text().strip())
+
+    def _focus_url(self) -> None:
+        self.url_edit.setFocus(Qt.ShortcutFocusReason)
+        self.url_edit.selectAll()
+
+    def _reload_page(self) -> None:
+        if self.view is None:
+            return
+        if self._showing_error and self._failed_url:
+            self.open_url(self._failed_url)
+            return
+        self.view.reload()
+
+    def _go_back(self) -> None:
+        if self.view is not None:
+            self.view.back()
+
+    def _go_forward(self) -> None:
+        if self.view is not None:
+            self.view.forward()
+
+    def _on_reload_clicked(self) -> None:
+        if self.view is None:
+            return
+        if self._loading:
+            self._stop_requested = True
+            self.view.stop()
+            return
+        self._reload_page()
+
     def _on_url_changed(self, url: QUrl) -> None:
+        scheme = url.scheme()
+        if self._showing_error:
+            if scheme not in ("http", "https"):
+                return
+            # 用户在错误页点了重试，或地址栏重新导航：退出错误页保护。
+            self._showing_error = False
         if not self.url_edit.hasFocus():
             self.url_edit.setText(url.toString())
 
+    # ------------------------------------------------------------ 加载信号
+
     def _on_load_started(self) -> None:
-        """正在加载认证页面…"""
-        self.progress.show()
-        self.hint.setText("正在加载认证页面…")
+        if self._ignore_next_load:
+            self._ignore_next_load = False
+            return
+        if self._showing_error:
+            self._showing_error = False
+        self._failed_url = ""
+        self._stop_requested = False
+        self._set_loading(True)
 
     def _on_load_finished(self, ok: bool) -> None:
-        """页面加载失败，请检查校园网连接或地址是否正确。"""
-        self.progress.hide()
-        if not ok:
-            self.hint.setText("页面加载失败，请检查校园网连接或地址是否正确。")
+        self._ignore_next_load = False
+        if self.view is None:
             return
+
+        if self._showing_error:
+            # 这条信号来自内嵌错误页自身，保留「加载失败」状态。
+            self._set_loading(False)
+            self._set_status("failed", self._failed_url or "页面打不开")
+            return
+
+        url = self.url_edit.text().strip()
+        try:
+            current = self.view.url().toString()
+            if current and current != "about:blank":
+                url = current
+        except Exception:
+            pass
+
+        if not ok:
+            if self._stop_requested:
+                self._stop_requested = False
+                self._failed_url = ""
+                self._set_loading(False)
+                self._set_status("idle", "已停止加载")
+                return
+            self._failed_url = url or self._home_url()
+            self._set_loading(False)
+            self._set_status("failed", self._failed_url)
+            self._update_title("页面打不开")
+            self._show_error_page(self._failed_url)
+            return
+
         title = ""
         try:
             title = self.view.title()
         except Exception:
             pass
-        self.hint.setText(f"已加载：{title or self.url_edit.text()}\u3000|\u3000在这里手动登录后，回主界面点「检测并登录」")
-        self.setWindowTitle(f"校园网认证 · {title}" if title else "校园网认证 · 内置浏览器")
+        self._failed_url = ""
+        self._set_loading(False)
+        self._set_status("loaded", title or url)
+        self._update_title(title)
+
+    def _show_error_page(self, url: str) -> None:
+        """把「页面打不开」做成网页本身：居中大字 + 说明 + 重试按钮。"""
+        if self.view is None:
+            return
+        self._showing_error = True
+        self._ignore_next_load = True
+        self.view.setHtml(self._error_html(url), QUrl("about:blank"))
+
+    def _error_html(self, url: str) -> str:
+        bg = theme.color("card")
+        fg = theme.color("text")
+        secondary = theme.color("text_secondary")
+        accent = theme.color("accent")
+        safe_url = html.escape(url or "")
+        action = html.escape(url or "about:blank", quote=True)
+        return f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>页面打不开</title>
+<style>
+    html, body {{ height: 100%; margin: 0; background: {bg}; }}
+    body {{
+        display: flex; align-items: center; justify-content: center;
+        font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+        color: {fg};
+    }}
+    .card {{ max-width: 640px; padding: 40px 32px; text-align: center; }}
+    h1 {{ margin: 0 0 14px; font-size: 30px; font-weight: 600; }}
+    p {{ margin: 6px 0; font-size: 14px; line-height: 1.8; color: {secondary}; word-break: break-all; }}
+    code {{ font-size: 13px; color: {accent}; }}
+    .retry {{
+        display: inline-block; margin-top: 22px; padding: 9px 28px;
+        border-radius: 6px; background: {accent}; color: #FFFFFF;
+        font-size: 14px; text-decoration: none;
+    }}
+    .retry:hover {{ opacity: 0.86; }}
+</style>
+</head>
+<body>
+<div class="card">
+    <h1>页面打不开</h1>
+    <p>请检查校园网连接是否正常，或确认下面的地址是否正确。</p>
+    <p><code>{safe_url}</code></p>
+    <a class="retry" href="{action}">重新加载</a>
+</div>
+</body>
+</html>"""
+
+    # ------------------------------------------------------------ 自动填表
+
+    def _notify(self, kind: str, title: str, content: str = "") -> None:
+        """用户主动操作的反馈走窗口内 InfoBar；没有 Toast 时静默降级。"""
+        try:
+            from .toasts import Toast
+
+            Toast.show_toast(self, title, content, kind)
+        except Exception:
+            pass
 
     def _fill_and_submit(self) -> None:
         """把账号密码填进门户表单并点登录（页面结构差异大，做尽力而为）。"""
@@ -287,7 +605,8 @@ class BrowserWindow(QWidget):
         username = str(config.get("username") or "")
         password = str(self.service.settings.password or "")
         if not username:
-            self.hint.setText("还没保存账号，请先到「设置 → 认证账户」里填写。")
+            self._notify("warning", "无法自动填表", "还没保存账号，请先到「设置 → 认证账户」里填写。")
+            self.status_label.setToolTip("无法自动填表：还没保存账号")
             return
         script = f"""
         (function() {{
@@ -324,19 +643,22 @@ class BrowserWindow(QWidget):
         self.view.page().runJavaScript(script, self._on_script_done)
 
     def _on_script_done(self, result) -> None:
-        """clicked"""
         text = str(result)
         if text.startswith("clicked"):
-            self.hint.setText(f"已自动填写并提交（{text}）。若没反应，请手动点页面上的登录按钮。")
+            self._notify("success", "已自动填写并提交", "若页面没反应，请手动点页面上的登录按钮。")
+            self.status_label.setToolTip(f"已自动填写并提交（{text}）")
         else:
-            self.hint.setText("已把账号密码填进页面，请手动确认后点击登录按钮。")
+            self._notify("info", "已填写账号密码", "请手动确认后点击页面上的登录按钮。")
+            self.status_label.setToolTip("已填写账号密码，等待手动登录")
 
     def _open_external(self) -> None:
         from ..core.winutil import open_path
 
-        open_path(self.url_edit.text().strip() or self._home_url())
+        url = self.url_edit.text().strip() or self._failed_url or self._home_url()
+        open_path(url)
 
     def closeEvent(self, event) -> None:
+        self._save_geometry()
         event.ignore()
         self.hide()
 

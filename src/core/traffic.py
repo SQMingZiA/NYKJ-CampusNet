@@ -89,6 +89,19 @@ class TrafficMonitor:
         self._persist_dirty = False
         self._last_persist = 0.0
 
+        # 记录闸门：返回 False 时本次差值只用于实时速率，不写入历史/会话/配额。
+        # 由 CampusService 按「是否在校园网」设置（见 traffic_only_campus）。
+        self.record_gate: Callable[[], bool] | None = None
+
+    def _record_allowed(self) -> bool:
+        gate = self.record_gate
+        if gate is None:
+            return True
+        try:
+            return bool(gate())
+        except Exception:
+            return True
+
     def start(self) -> None:
         self.load()
         self.sample()
@@ -254,10 +267,11 @@ class TrafficMonitor:
         }
 
         if delta_rx > 0 or delta_tx > 0:
-            self._add_to_history(now, delta_rx, delta_tx)
-            self._session['rx'] += delta_rx
-            self._session['tx'] += delta_tx
-            self._persist_dirty = True
+            if self._record_allowed():
+                self._add_to_history(now, delta_rx, delta_tx)
+                self._session['rx'] += delta_rx
+                self._session['tx'] += delta_tx
+                self._persist_dirty = True
 
         timeline = Timeline(
             at=now,
@@ -333,6 +347,63 @@ class TrafficMonitor:
                     'total': value['rx'] + value['tx'],
                 })
         return out[-max_points:]
+
+    def range_summary(self, start_ts: float, end_ts: float) -> dict[str, int]:
+        """统计 ``[start_ts, end_ts)`` 内的用量（小时桶相加）。"""
+        rx = tx = 0
+        with self._lock:
+            for key, value in self._history.items():
+                ts = key_to_ts(key)
+                if ts is None or ts < start_ts or ts >= end_ts:
+                    continue
+                rx += value['rx']
+                tx += value['tx']
+        return {'rx': rx, 'tx': tx, 'total': rx + tx}
+
+    def range_series(
+        self,
+        start_ts: float,
+        end_ts: float,
+        max_points: int = 240,
+    ) -> list[dict[str, Any]]:
+        """取 ``[start_ts, end_ts)`` 的曲线数据，点数超过 ``max_points`` 时按桶合并。
+
+        时间范围可以跨任意天数（「近 7 天」「上一个 7 天」「自定义」都走这里）。
+        """
+        items: list[dict[str, Any]] = []
+        with self._lock:
+            for key in sorted(self._history):
+                ts = key_to_ts(key)
+                if ts is None or ts < start_ts or ts >= end_ts:
+                    continue
+                value = self._history[key]
+                items.append({
+                    'ts': ts,
+                    'key': key,
+                    'rx': value['rx'],
+                    'tx': value['tx'],
+                    'total': value['rx'] + value['tx'],
+                })
+
+        if len(items) <= max_points:
+            return items
+
+        span = max(1.0, end_ts - start_ts)
+        bucket_sec = span / max_points
+        buckets: dict[int, dict[str, Any]] = {}
+        for item in items:
+            index = int((item['ts'] - start_ts) // bucket_sec)
+            bucket = buckets.setdefault(index, {
+                'ts': start_ts + index * bucket_sec,
+                'key': item['key'],
+                'rx': 0,
+                'tx': 0,
+                'total': 0,
+            })
+            bucket['rx'] += item['rx']
+            bucket['tx'] += item['tx']
+            bucket['total'] += item['total']
+        return [buckets[index] for index in sorted(buckets)]
 
     def summary(self) -> dict[str, Any]:
         now = dt.datetime.now()

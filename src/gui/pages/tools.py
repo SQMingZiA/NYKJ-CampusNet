@@ -6,12 +6,16 @@
 
 from __future__ import annotations
 
+import datetime as dt
+import time
 from typing import Any
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QDate, Qt, QTimer
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (
     QAbstractItemView,
+    QDateEdit,
+    QDialog,
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
@@ -28,6 +32,7 @@ from qfluentwidgets import (
     LineEdit,
     PlainTextEdit,
     PrimaryPushButton,
+    ProgressBar,
     PushButton,
     SegmentedWidget,
     SmoothScrollArea,
@@ -48,14 +53,11 @@ from ..formatting import (
     signal_label,
 )
 
-import time
-
 from ..dialogs import confirm_typed
 from ..toasts import Toast
-from ..widgets import Card, KVGrid, StatTile, caption_label, scroll_page
+from ..widgets import Card, KVGrid, StatTile, scroll_page
 
-# 测速最长允许挂在「测速中」的秒数；超过就认为测速源不可达。
-SPEED_TIMEOUT_SEC = 150.0
+from ...net import diagnostics, wifi
 
 
 def _make_table(headers: list[str], stretch_column: int = 0) -> TableWidget:
@@ -120,11 +122,19 @@ def _insert(layout: QVBoxLayout, widget: QWidget) -> QWidget:
 
 
 class WifiView(QWidget):
+    """无线网络：当前连接、可用网络、已保存配置。"""
+
     def __init__(self, service, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.service = service
         self._state = {}
         self._networks = []
+        self._profiles: list[str] = []
+        self._shown = False
+        self._scanning = False
+        self._scanned = False
+        self._profiles_loading = False
+        self._status_loading = False
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -166,17 +176,19 @@ class WifiView(QWidget):
         scan_row = QHBoxLayout()
         scan_row.setSpacing(8)
         self.scan_button = PrimaryPushButton(FIF.SEARCH, "扫描网络", self)
+        self.scan_button.setToolTip("扫描附近的无线网络；扫描在后台进行，不会卡住界面")
         self.scan_button.clicked.connect(self.scan)
         scan_row.addWidget(self.scan_button)
         self.connect_button = PushButton(FIF.CONNECT, "连接选中网络", self)
+        self.connect_button.setToolTip("先在上表里选中一个网络，再点这里连接")
+        self.connect_button.setEnabled(False)
         self.connect_button.clicked.connect(self.connect_selected)
         scan_row.addWidget(self.connect_button)
         scan_row.addStretch(1)
-        self.scan_hint = caption_label("", self)
-        scan_row.addWidget(self.scan_hint)
         self.scan_card.add_layout(scan_row)
 
         self.network_table = _make_table(["网络名称", "信号", "强度", "信道", "自动连接名单"])
+        self.network_table.itemSelectionChanged.connect(self._update_connect_state)
         self.scan_card.add(self.network_table)
         _insert(layout, self.scan_card)
 
@@ -185,8 +197,10 @@ class WifiView(QWidget):
         profile_row.setSpacing(8)
         self.profile_combo = ComboBox(self)
         self.profile_combo.setMinimumWidth(240)
+        self.profile_combo.setPlaceholderText("还没有保存过 WiFi 配置")
         profile_row.addWidget(self.profile_combo)
         self.profile_connect = PushButton(FIF.WIFI, "连接", self)
+        self.profile_connect.setEnabled(False)
         self.profile_connect.clicked.connect(self.connect_profile)
         profile_row.addWidget(self.profile_connect)
         self.profile_refresh = PushButton(FIF.SYNC, "刷新", self)
@@ -196,15 +210,44 @@ class WifiView(QWidget):
         self.profile_card.add_layout(profile_row)
         _insert(layout, self.profile_card)
 
+    def showEvent(self, event) -> None:
+        """首次显示时自动填好状态、配置，并在后台扫描一次网络。"""
+        super().showEvent(event)
+        if self._shown:
+            return
+        self._shown = True
+        self.refresh_status()
+        self.load_profiles()
+        self._fill_known_networks(force=True)
+        if not self._scanned and not self._scanning:
+            self.scan()
+
     def refresh_status(self) -> None:
-        run_async(self.service.wifi_status, on_done=self._apply_status, on_error=self._fail)
+        if self._status_loading:
+            return
+        self._status_loading = True
+        self.refresh_button.setEnabled(False)
+        self.refresh_button.setText("读取中…")
+        run_async(self.service.wifi_status, on_done=self._apply_status, on_error=self._on_status_error)
 
     def load_profiles(self) -> None:
-        run_async(self.service.saved_profiles, on_done=self._apply_profiles)
+        if self._profiles_loading:
+            return
+        self._profiles_loading = True
+        self.profile_refresh.setEnabled(False)
+        self.profile_refresh.setText("刷新中…")
+        run_async(
+            self.service.saved_profiles,
+            on_done=self._apply_profiles,
+            on_error=self._on_profiles_error,
+        )
 
     def scan(self) -> None:
+        if self._scanning:
+            return
+        self._scanning = True
         self.scan_button.setEnabled(False)
-        self.scan_hint.setText("正在扫描…")
+        self.scan_button.setText("扫描中…")
         run_async(
             self.service.scan_wifi,
             True,
@@ -229,22 +272,31 @@ class WifiView(QWidget):
     def connect_profile(self) -> None:
         ssid = self.profile_combo.currentText().strip()
         if not ssid:
-            Toast.info(self, "没有可连接的配置", "先刷新已保存的配置文件。")
+            Toast.info(self, "还没有保存过配置", "先在系统里连接一次 WiFi，配置文件会自动出现。")
             return
         self._connect_ssid(ssid)
 
     def _connect_ssid(self, ssid: str) -> None:
         self.connect_button.setEnabled(False)
+        self.profile_connect.setEnabled(False)
         Toast.info(self, "正在连接", f"正在连接 {ssid}…")
 
         def done(result: Any) -> None:
-            self.connect_button.setEnabled(True)
+            self._update_connect_state()
+            self.profile_connect.setEnabled(bool(self._profiles))
             self._toast(result, f"连接 {ssid}")
             self.refresh_status()
 
         run_async(self.service.connect_ssid, ssid, on_done=done, on_error=self._fail)
 
+    def _update_connect_state(self) -> None:
+        rows = self.network_table.selectionModel().selectedRows() if self.network_table.selectionModel() else []
+        self.connect_button.setEnabled(bool(rows))
+
     def _apply_status(self, status: Any) -> None:
+        self._status_loading = False
+        self.refresh_button.setEnabled(True)
+        self.refresh_button.setText("刷新状态")
         if not isinstance(status, dict):
             return
         rx = status.get("rx_rate_mbps")
@@ -262,25 +314,79 @@ class WifiView(QWidget):
             "auth": " / ".join(filter(None, [status.get("authentication") or "", status.get("cipher") or ""])) or "—",
         })
 
+    def _on_status_error(self, message: str) -> None:
+        self._status_loading = False
+        self.refresh_button.setEnabled(True)
+        self.refresh_button.setText("刷新状态")
+        self.refresh_button.setToolTip((message or "").splitlines()[0])
+
     def _apply_profiles(self, result: Any) -> None:
+        self._profiles_loading = False
+        self.profile_refresh.setEnabled(True)
+        self.profile_refresh.setText("刷新")
         if not isinstance(result, dict):
             return
-        profiles = result.get("profiles") or []
+        profiles = [str(name) for name in result.get("profiles") or []]
+        self._profiles = profiles
         self.profile_combo.clear()
         for name in profiles:
             self.profile_combo.addItem(name)
-        if not profiles:
-            self.profile_combo.addItem("")
-            self.profile_combo.setPlaceholderText("没有已保存的配置")
+        self.profile_combo.setPlaceholderText(
+            "选择一个已保存的配置" if profiles else "还没有保存过 WiFi 配置"
+        )
+        self.profile_connect.setEnabled(bool(profiles))
+        self.profile_refresh.setToolTip(f"已读取 {len(profiles)} 个配置" if profiles else "系统里还没有已保存的 WiFi 配置")
+        self._fill_known_networks()
+
+    def _on_profiles_error(self, message: str) -> None:
+        self._profiles_loading = False
+        self.profile_refresh.setEnabled(True)
+        self.profile_refresh.setText("刷新")
+        Toast.warning(self, "读取配置失败", (message or "").splitlines()[0])
+
+    def _fill_known_networks(self, force: bool = False) -> None:
+        """扫描结果回来前，先用已保存配置和自动连接名单把表格填上。"""
+        if self._scanned and not force:
+            return
+        allow = list(getattr(self.service.settings, "wifi_allow_list", []) or [])
+        names = list(dict.fromkeys(self._profiles + allow))
+        self._networks = [
+            {"ssid": name, "known": True, "in_allow_list": wifi.any_ssid_matches(name, allow)}
+            for name in names
+        ]
+        rows = [
+            [item["ssid"], "—", "—", "—", "是" if item["in_allow_list"] else "否"]
+            for item in self._networks
+        ]
+        _fill_table(self.network_table, rows)
+        if rows:
+            self.scan_button.setToolTip(
+                f"表中是已知网络（{len(rows)} 个）；点「扫描网络」获取附近的实时结果"
+            )
+        self.network_table.clearSelection()
+        self._update_connect_state()
 
     def _apply_scan(self, result: Any) -> None:
+        self._scanning = False
         self.scan_button.setEnabled(True)
-        self._networks = list((result or {}).get("networks") or [])
+        self.scan_button.setText("扫描网络")
+        networks = list((result or {}).get("networks") or [])
+        if not networks:
+            self._scanned = False
+            self._fill_known_networks(force=True)
+            self.scan_button.setToolTip("这次没有扫描到网络；表中显示的是已知网络")
+            Toast.warning(self, "没有扫描到网络", "请确认无线网卡已开启，然后重试。")
+            return
 
+        self._scanned = True
+        self._networks = networks
         added = []
         campus = self.service.campus_candidates(self._networks)
         if campus:
-            added = self.service.adopt_networks([n["ssid"] for n in campus])
+            try:
+                added = self.service.adopt_networks([n["ssid"] for n in campus])
+            except Exception:
+                added = []
 
         rows = []
         for item in self._networks:
@@ -290,20 +396,21 @@ class WifiView(QWidget):
                 f"{signal}%" if isinstance(signal, (int, float)) else "—",
                 signal_label(signal),
                 str(item.get("channel") or "—"),
-                "✔ 在名单内" if item.get("in_allow_list") else "",
+                "是" if item.get("in_allow_list") else "否",
             ])
 
         _fill_table(self.network_table, rows)
+        self.network_table.clearSelection()
+        self._update_connect_state()
+        self.scan_button.setToolTip(f"共发现 {len(rows)} 个网络（点一下可重新扫描）")
         if added:
-            self.scan_hint.setText(f"共发现 {len(rows)} 个网络；已自动把 {', '.join(added)} 加入自动连接名单")
-        else:
-            self.scan_hint.setText(f"共发现 {len(rows)} 个网络。" if rows else "没有扫描到网络。")
+            Toast.info(self, "已加入自动连接名单", "、".join(added))
 
     def on_state(self, state: dict) -> None:
         self._state = state or {}
-        wifi = self._state.get("wifi_status") or {}
-        if wifi:
-            self._apply_status(wifi)
+        wifi_state = self._state.get("wifi_status") or {}
+        if wifi_state:
+            self._apply_status(wifi_state)
 
     def _toast(self, result: Any, what: str) -> None:
         if isinstance(result, dict):
@@ -315,29 +422,42 @@ class WifiView(QWidget):
             Toast.success(self, f"{what}完成", "")
 
     def _fail(self, message: str) -> None:
+        self._scanning = False
         self.scan_button.setEnabled(True)
-        self.connect_button.setEnabled(True)
+        self.scan_button.setText("扫描网络")
+        self._profiles_loading = False
+        self.profile_refresh.setEnabled(True)
+        self.profile_refresh.setText("刷新")
+        self._update_connect_state()
+        self.profile_connect.setEnabled(bool(self._profiles))
         Toast.error(self, "操作失败", (message or "").splitlines()[0])
 
     def on_theme_changed(self) -> None:
         pass
 
 
-
-
-
-
-
-
-
-
-
+# 整轮诊断的最长等待时间；超过就恢复按钮，避免一直停在「测试中」。
+DIAG_TIMEOUT_SEC = 180.0
 
 
 class DiagView(QWidget):
+    """网络诊断：一次点击依次跑完连通性、延迟、DNS、下载、上传。"""
+
     def __init__(self, service, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.service = service
+        self._run_id = 0
+        self._running = False
+        self._started = 0.0
+        self._rows: list[list[str]] = []
+        self._tips: list[str] = []
+        self._steps = (
+            ("connectivity", self._probe_connectivity),
+            ("latency", lambda: diagnostics.latency_test(count=5)),
+            ("dns", diagnostics.dns_benchmark),
+            ("download", lambda: diagnostics.download_speed(duration_ms=8000)),
+            ("upload", lambda: diagnostics.upload_speed(duration_ms=4000)),
+        )
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -346,305 +466,413 @@ class DiagView(QWidget):
         scroll, layout = _scroll_page()
         outer.addWidget(scroll)
 
-        card = Card("连通性概览", parent=self)
+        card = Card("网络诊断", parent=self)
         row = QHBoxLayout()
         row.setSpacing(8)
-        self.run_button = PrimaryPushButton(FIF.SPEED_HIGH, "一键诊断", self)
-        self.run_button.clicked.connect(self.run_diagnostic)
-        row.addWidget(self.run_button)
-        self.ip_button = PushButton(FIF.GLOBE, "查询出口 IP", self)
-        self.ip_button.clicked.connect(self.fetch_ip)
-        row.addWidget(self.ip_button)
+        self.speed_button = PrimaryPushButton(FIF.PLAY, "开始测试", self)
+        self.speed_button.setToolTip("依次测试连通性、延迟、DNS、下载与上传，整轮最长 180 秒")
+        self.speed_button.clicked.connect(self.start_tests)
+        self.run_button = self.speed_button
+        row.addWidget(self.speed_button)
         row.addStretch(1)
         card.add_layout(row)
 
-        self.kv = KVGrid([("gateway", "默认网关"), ("public_ip", "出口 IP"), ("dns", "DNS 服务器"), ("tcp", "TCP 延迟"), ("elapsed", "诊断耗时")], columns=2, parent=self)
-        card.add(self.kv)
-        _insert(layout, card)
-
-        self.speed_card = Card("测速", parent=self)
-        speed_row = QHBoxLayout()
-        speed_row.setSpacing(8)
-        self.speed_button = PrimaryPushButton(FIF.DOWNLOAD, "开始完整测速", self)
-        self.speed_button.clicked.connect(self.speed_test)
-        speed_row.addWidget(self.speed_button)
-        self.download_button = PushButton(FIF.CLOUD, "只测下载", self)
-        self.download_button.clicked.connect(self.download_only)
-        speed_row.addWidget(self.download_button)
-        speed_row.addStretch(1)
-        self.speed_hint = caption_label("", self)
-        speed_row.addWidget(self.speed_hint)
-        self.speed_card.add_layout(speed_row)
-
-        from PyQt5.QtCore import QTimer as _QTimer
-        from qfluentwidgets import IndeterminateProgressBar
-
-        self.speed_progress = IndeterminateProgressBar(self)
-        self.speed_progress.setVisible(False)
-        self.speed_card.add(self.speed_progress)
-        self._speed_started = 0.0
-        self._speed_timer = _QTimer(self)
-        self._speed_timer.setInterval(200)
-        self._speed_timer.timeout.connect(self._tick_speed)
-        self.speed_button.clicked.connect(lambda: self._speed_busy(True))
-        self.download_button.clicked.connect(lambda: self._speed_busy(True))
+        self.progress = ProgressBar(self)
+        self.progress.setRange(0, len(self._steps))
+        self.progress.setValue(0)
+        self.progress.setVisible(False)
+        card.add(self.progress)
 
         tiles = QHBoxLayout()
         tiles.setSpacing(12)
-        self.tile_down = StatTile("下载", "-", "—", parent=self)
-        self.tile_up = StatTile("上传", "-", "—", parent=self)
-        self.tile_latency = StatTile("延迟", "-", "—", parent=self)
-        self.tile_jitter = StatTile("抖动", "-", "—", parent=self)
-        for tile in (self.tile_down, self.tile_up, self.tile_latency, self.tile_jitter):
+        self.tile_latency = StatTile("延迟", "—", "未测试", parent=self)
+        self.tile_jitter = StatTile("抖动", "—", "未测试", parent=self)
+        self.tile_down = StatTile("下载", "—", "未测试", parent=self)
+        self.tile_up = StatTile("上传", "—", "未测试", parent=self)
+        self.tile_dns = StatTile("DNS 最快响应", "—", "未测试", parent=self)
+        for tile in (self.tile_latency, self.tile_jitter, self.tile_down, self.tile_up, self.tile_dns):
             tiles.addWidget(tile, 1)
-        self.speed_card.add_layout(tiles)
+        card.add_layout(tiles)
 
-        self.speed_table = _make_table(["测速项", "结果", "说明"])
-        self.speed_table.setMinimumHeight(150)
-        self.speed_card.add(self.speed_table)
-        _insert(layout, self.speed_card)
-
-        self.ping_card = Card("延迟与 DNS", parent=self)
-        self.ping_table = _make_table(["延迟目标", "主机", "平均延迟", "最小 / 最大", "丢包"])
-        self.ping_table.setMinimumHeight(140)
-        self.ping_card.add(self.ping_table)
-
-        self.dns_table = _make_table(["DNS 域名", "耗时", "解析结果"])
-        self.dns_table.setMinimumHeight(140)
-        self.ping_card.add(self.dns_table)
-        self.dns_card = self.ping_card
-        _insert(layout, self.ping_card)
-
-    def _speed_busy(self, busy: bool) -> None:
-        """测速的"运行中"提示：转圈进度条 + 已用秒数。"""
-        if busy:
-            if self._speed_started:
-                return
-            self._speed_started = time.time()
-            self.speed_hint.setText("测速中… 0.0 秒")
-            self.speed_progress.setVisible(True)
-            try:
-                self.speed_progress.start()
-            except Exception:
-                pass
-            self._speed_timer.start()
-        else:
-            self._speed_timer.stop()
-            self._speed_started = 0.0
-            try:
-                self.speed_progress.stop()
-            except Exception:
-                pass
-            self.speed_progress.setVisible(False)
-
-    def _tick_speed(self) -> None:
-        if not self._speed_started:
-            return
-        elapsed = time.time() - self._speed_started
-        self.speed_hint.setText(f"测速中… 已 {elapsed:.1f} 秒")
-        if elapsed > SPEED_TIMEOUT_SEC:
-            # 兜底：测速源被拦截时可能久到离谱，别让界面永远停在「测速中」。
-            self._speed_busy(False)
-            self.speed_hint.setText("测速超时：测速源不可达，请稍后再试")
-            self.speed_button.setEnabled(True)
-            self.download_button.setEnabled(True)
-
-    def run_diagnostic(self) -> None:
-        self.run_button.setEnabled(False)
-        self.kv.set("elapsed", "诊断中…")
-        run_async(self.service.run_diagnostic, on_done=self._apply_diag, on_error=self._fail)
-
-    def fetch_ip(self) -> None:
-        """public_ip"""
-        self.kv.set("public_ip", "查询中…")
-        run_async(self.service.fetch_public_ip, on_done=self._apply_ip, on_error=self._fail)
-
-    def speed_test(self) -> None:
-        """完整测速：延迟/抖动 + 下载 + 上传。"""
-        self.speed_button.setEnabled(False)
-        self.download_button.setEnabled(False)
-        self.speed_hint.setText("正在测速…（延迟 → 下载 → 上传）")
-        self.tile_down.set_value("测速中…", "正在挑选可用镜像")
-        self.tile_up.set_value("等待中…", "—")
-        run_async(self.service.speed_test, 8000, on_done=self._apply_speed, on_error=self._fail)
-
-    def download_only(self) -> None:
-        self.speed_button.setEnabled(False)
-        self.download_button.setEnabled(False)
-        self.speed_hint.setText("正在测下载…")
-        run_async(self.service.speed_test_download_only, 8000, on_done=self._apply_speed, on_error=self._fail)
-
-    def _apply_diag(self, result: Any) -> None:
-        self.run_button.setEnabled(True)
-        if not isinstance(result, dict):
-            return
-        rows = []
-        tips = []
-        for item in result.get("results") or []:
-            avg = item.get("avg_ms")
-            via = item.get("via")
-            rows.append([
-                item.get("name", ""),
-                item.get("host", ""),
-                (f"{avg} ms（TCP）" if via == "tcp" else f"{avg} ms") if avg is not None else "—",
-                f"{item.get('min_ms') if item.get('min_ms') is not None else '—'} / {item.get('max_ms') if item.get('max_ms') is not None else '—'}",
-                f"{item.get('loss_percent', 100)}%",
-            ])
-            tips.append(f"{item.get('name', '')}（{item.get('host', '')}）\n平均 {avg} ms，丢包 {item.get('loss_percent', 100)}%" + (f"\nICMP 不通，改用 TCP:{item.get('port')} 握手测延迟" if via == "tcp" else ""))
-        _fill_table(self.ping_table, rows, tips or None)
-
-        dns = result.get("dns") or {}
-        dns_rows = [
+        self.kv = KVGrid(
             [
-                entry.get("name", ""),
-                f"{entry.get('ms', 0)} ms",
-                ", ".join(entry.get("addresses") or []) or "解析失败",
-            ]
-            for entry in dns.get("results") or []
-        ]
-        _fill_table(self.dns_table, dns_rows)
+                ("gateway", "默认网关"),
+                ("local_ip", "本机 IP"),
+                ("public_ip", "公网 IP"),
+                ("dns", "DNS 服务器"),
+                ("route", "出口路由"),
+            ],
+            columns=2,
+            parent=self,
+        )
+        card.add(self.kv)
 
-        tcp = result.get("tcp") or {}
-        routes = (result.get("routes") or {}).get("default_routes") or []
+        self.result_table = _make_table(["探测项目", "结果", "耗时 / 速率", "备注"])
+        self.result_table.setMinimumHeight(240)
+        self.speed_table = self.result_table
+        card.add(self.result_table)
+        _insert(layout, card)
+
+        self._timer = QTimer(self)
+        self._timer.setInterval(1000)
+        self._timer.timeout.connect(self._check_timeout)
+
+    def _probe_connectivity(self) -> dict:
+        """第一步：网关、本机 / 公网 IP、系统 DNS、默认路由与网关连通性。"""
+        from ...core.sysinfo import local_interfaces
+
+        interfaces = local_interfaces()
+        iface = interfaces[0] if interfaces else {}
+        routes = diagnostics.routes()
+        public = self.service.fetch_public_ip()
+        default_route = (routes.get("default_routes") or [{}])[0]
+        gateway = str(
+            default_route.get("gateway")
+            or ((iface.get("gateway") or [""])[0])
+            or ""
+        )
+        ping_result = diagnostics.ping(gateway, 3) if gateway else {"ok": False, "message": "没有默认网关"}
+        return {
+            "gateway": gateway,
+            "local_ip": ", ".join(iface.get("ipv4") or []),
+            "public_ip": public.get("ip") if public.get("ok") else "",
+            "public_message": public.get("message") or "",
+            "dns": iface.get("dns") or [],
+            "routes": routes.get("default_routes") or [],
+            "ping": ping_result,
+        }
+
+    def start_tests(self) -> None:
+        if self._running:
+            return
+        self._running = True
+        self._run_id += 1
+        self._started = time.time()
+        self._rows = []
+        self._tips = []
+        for tile in (self.tile_latency, self.tile_jitter, self.tile_down, self.tile_up, self.tile_dns):
+            tile.set_value("—", "未测试")
+            tile.setToolTip("")
         self.kv.update_values({
-            "gateway": routes[0].get("gateway", "—") if routes else "—",
-            "dns": ", ".join(dns.get("servers") or []) or "—",
-            "tcp": f"{tcp.get('ms')} ms" if tcp.get("ok") else "不可达",
-            "elapsed": f"{result.get('elapsed_ms', 0)} ms",
+            "gateway": "—", "local_ip": "—", "public_ip": "—", "dns": "—", "route": "—",
+        })
+        _fill_table(self.result_table, [])
+        self.speed_button.setEnabled(False)
+        self.progress.setValue(0)
+        self.progress.setVisible(True)
+        self._timer.start()
+        self._run_step(0, self._run_id)
+
+    def _run_step(self, index: int, token: int) -> None:
+        if token != self._run_id or not self._running:
+            return
+        if index >= len(self._steps):
+            self._finish()
+            return
+        self.speed_button.setText(f"测试中 {index + 1}/{len(self._steps)}…")
+        self.progress.setValue(index)
+        task = self._steps[index][1]
+        run_async(
+            task,
+            on_done=lambda result, i=index, t=token: self._step_done(i, result, t),
+            on_error=lambda message, i=index, t=token: self._step_failed(i, message, t),
+        )
+
+    def _step_done(self, index: int, result: Any, token: int) -> None:
+        if token != self._run_id:
+            return
+        name = self._steps[index][0]
+        apply = {
+            "connectivity": self._apply_connectivity,
+            "latency": self._apply_latency,
+            "dns": self._apply_dns,
+            "download": self._apply_download,
+            "upload": self._apply_upload,
+        }[name]
+        try:
+            apply(result)
+        except Exception as exc:
+            self._step_failed(index, f"{type(exc).__name__}: {exc}", token)
+            return
+        self.progress.setValue(index + 1)
+        self._run_step(index + 1, token)
+
+    def _step_failed(self, index: int, message: str, token: int) -> None:
+        if token != self._run_id:
+            return
+        self._mark_failed(index, (message or "").splitlines()[0])
+        self.progress.setValue(index + 1)
+        self._run_step(index + 1, token)
+
+    def _mark_failed(self, index: int, message: str) -> None:
+        """把某一步的失败原因写进 tile 的 subtitle 和 tooltip。"""
+        name = self._steps[index][0]
+        if name == "connectivity":
+            self.kv.update_values({
+                "gateway": "—", "local_ip": "—", "public_ip": "—", "dns": "—", "route": "—",
+            })
+            self._add_row("连通性概览", "失败", "—", message)
+        elif name == "latency":
+            for tile in (self.tile_latency, self.tile_jitter):
+                tile.set_value("—", "失败")
+                tile.setToolTip(message)
+            self._add_row("延迟测试", "失败", "—", message)
+        elif name == "dns":
+            self.tile_dns.set_value("—", "失败")
+            self.tile_dns.setToolTip(message)
+            self._add_row("DNS 基准", "失败", "—", message)
+        elif name == "download":
+            self.tile_down.set_value("—", "失败")
+            self.tile_down.setToolTip(message)
+            self._add_row("下载测速", "失败", "—", message)
+        elif name == "upload":
+            self.tile_up.set_value("—", "失败")
+            self.tile_up.setToolTip(message)
+            self._add_row("上传测速", "失败", "—", message)
+
+    def _add_row(self, item: str, result: str, metric: str, note: str) -> None:
+        self._rows.append([item, result, metric, note])
+        self._tips.append(f"{item}\n结果：{result}\n耗时 / 速率：{metric}\n备注：{note}")
+        _fill_table(self.result_table, self._rows, self._tips)
+
+    def _apply_connectivity(self, result: Any) -> None:
+        result = result or {}
+        gateway = str(result.get("gateway") or "—")
+        local_ip = str(result.get("local_ip") or "—")
+        public_ip = str(result.get("public_ip") or "")
+        dns = ", ".join(result.get("dns") or []) or "—"
+        routes = result.get("routes") or []
+        route = routes[0] if routes else {}
+        route_text = (
+            f"{route.get('gateway') or '—'} · {route.get('interface') or '—'}" if route else "—"
+        )
+        self.kv.update_values({
+            "gateway": gateway,
+            "local_ip": local_ip,
+            "public_ip": public_ip or "查询失败",
+            "dns": dns,
+            "route": route_text,
         })
 
-    def _apply_ip(self, result: Any) -> None:
-        """ok"""
-        if isinstance(result, dict) and result.get("ok"):
-            self.kv.set("public_ip", str(result.get("ip") or "—"))
-        else:
-            self.kv.set("public_ip", "查询失败")
-
-    def _apply_speed(self, result: Any) -> None:
-        self._speed_busy(False)
-        self.speed_button.setEnabled(True)
-        self.download_button.setEnabled(True)
-        if not isinstance(result, dict):
-            self.speed_hint.setText("测速失败")
-            return
-
-        if "download" in result or "latency" in result:
-            latency = result.get("latency") or {}
-            download = result.get("download") or {}
-            upload = result.get("upload") or {}
-        else:
-            latency, download, upload = {}, result, {}
-
-        if download.get("ok"):
-            self.tile_down.set_value(
-                f"{download.get('mbps')} Mbps",
-                f"{download.get('mb_per_sec')} MB/s · {download.get('label', '')}"
-                + ("（稳态）" if download.get("measured") == "steady" else ""),
+        ping_result = result.get("ping") or {}
+        if ping_result.get("ok"):
+            self._add_row(
+                "默认网关",
+                f"{ping_result.get('avg_ms')} ms",
+                f"丢包 {ping_result.get('loss_percent', 0)}%",
+                gateway,
             )
         else:
-            self.tile_down.set_value("失败", str(download.get("message") or "所有源不可用")[:40])
-
-        if upload.get("ok"):
-            self.tile_up.set_value(
-                f"{upload.get('mbps')} Mbps",
-                f"{upload.get('mb_per_sec')} MB/s · {upload.get('label', '')}"
-                + ("（稳态）" if upload.get("measured") == "steady" else ""),
-            )
+            self._add_row("默认网关", "不可达", "—", str(ping_result.get("message") or gateway))
+        if public_ip:
+            self._add_row("公网出口", public_ip, "—", "公网 IP 查询成功")
         else:
-            self.tile_up.set_value("不可用", str(upload.get("message") or "端点不可达")[:40])
-
-        best = (latency.get("best") or {}) if latency else {}
-        if best:
-            self.tile_latency.set_value(f"{best.get('avg_ms')} ms", f"最快：{best.get('name')}")
-            self.tile_jitter.set_value(f"{best.get('jitter_ms')} ms", f"TCP 握手抖动（{best.get('name')}）")
-        else:
-            self.tile_latency.set_value("—", "未测到")
-            self.tile_jitter.set_value("—", "未测到")
-
-        rows = []
-        tips = []
-        if download:
-            rows.append([
-                "下载",
-                f"{download.get('mbps')} Mbps" if download.get("ok") else "失败",
-                f"来源 {download.get('label') or '-'}，用时 {download.get('seconds')}s，共 {format_bytes(download.get('bytes'))}",
-            ])
-            tips.append(
-                f"下载测速\n来源：{download.get('label')}（{download.get('url')}）\n耗时 {download.get('seconds')}s，共 {format_bytes(download.get('bytes'))}"
+            self._add_row(
+                "公网出口", "查询失败", "—",
+                str(result.get("public_message") or "所有查询源都不可用"),
             )
-            for failed in download.get("tried") or []:
-                rows.append(["下载（跳过）", failed.get("label", ""), str(failed.get("error", ""))[:70]])
-        if upload:
-            rows.append([
-                "上传",
-                f"{upload.get('mbps')} Mbps" if upload.get("ok") else "不可用",
-                f"来源 {upload.get('label') or '-'}，共 {format_bytes(upload.get('bytes'))}"
-                + (f"；{upload.get('note')}" if upload.get("note") else ""),
-            ])
-            tips.append(
-                f"上传测速\n来源：{upload.get('label')}\n共 {format_bytes(upload.get('bytes'))}，用时 {upload.get('seconds')}s"
+        for item in routes[:2]:
+            self._add_row(
+                "默认路由",
+                str(item.get("gateway") or "—"),
+                f"接口 {item.get('interface') or '—'}",
+                f"metric {item.get('metric') or '—'}",
             )
-        for target in (latency.get("targets") if latency else []) or []:
-            rows.append([
+
+    def _apply_latency(self, result: Any) -> None:
+        result = result or {}
+        targets = result.get("targets") or []
+        for target in targets:
+            self._add_row(
                 f"延迟 · {target.get('name')}",
                 f"{target.get('avg_ms')} ms" if target.get("ok") else "不可达",
-                f"抖动 {target.get('jitter_ms')} ms，丢包 {target.get('loss')}%",
-            ])
-            tips.append(
-                f"{target.get('name')}（{target.get('host')}:{target.get('port')}）\n平均 {target.get('avg_ms')} ms，抖动 {target.get('jitter_ms')} ms，丢包 {target.get('loss')}%"
+                f"丢包 {target.get('loss') if target.get('loss') is not None else 100}%",
+                f"抖动 {target.get('jitter_ms')} ms · {target.get('host')}:{target.get('port')}",
             )
-        _fill_table(self.speed_table, rows, tips or None)
+        best = result.get("best") or {}
+        if best:
+            self.tile_latency.set_value(f"{best.get('avg_ms')} ms", f"最快 · {best.get('name')}")
+            self.tile_jitter.set_value(f"{best.get('jitter_ms')} ms", f"抖动 · {best.get('name')}")
+            self.tile_latency.setToolTip(f"{best.get('name')}（{best.get('host')}）平均 {best.get('avg_ms')} ms")
+            self.tile_jitter.setToolTip(f"{best.get('name')} 抖动 {best.get('jitter_ms')} ms")
+        else:
+            for tile in (self.tile_latency, self.tile_jitter):
+                tile.set_value("—", "失败")
+                tile.setToolTip("所有延迟目标都不可达")
 
-        bits = []
-        if download.get("ok"):
-            bits.append(f"下载 {download.get('mbps')} Mbps（{download.get('label')}）")
-        if upload.get("ok"):
-            bits.append(f"上传 {upload.get('mbps')} Mbps")
-        elif upload:
-            bits.append("上传不可用")
-        self.speed_hint.setText("测速完成：" + "；".join(bits) if bits else "测速完成，但所有源都不可用")
+    def _apply_dns(self, result: Any) -> None:
+        result = result or {}
+        servers = result.get("servers") or []
+        if servers:
+            self.kv.set("dns", ", ".join(servers))
+        entries = result.get("results") or []
+        for entry in entries:
+            self._add_row(
+                f"DNS · {entry.get('name')}",
+                f"{entry.get('ms')} ms" if entry.get("ok") else "解析失败",
+                ", ".join(entry.get("addresses") or []) or "—",
+                "解析成功" if entry.get("ok") else "没有返回地址",
+            )
+        usable = [entry for entry in entries if entry.get("ok")]
+        if usable:
+            best = min(usable, key=lambda entry: entry.get("ms") or 0)
+            self.tile_dns.set_value(f"{best.get('ms')} ms", f"最快 · {best.get('name')}")
+            self.tile_dns.setToolTip(f"{best.get('name')} 解析耗时 {best.get('ms')} ms")
+        else:
+            self.tile_dns.set_value("—", "失败")
+            self.tile_dns.setToolTip("所有 DNS 域名都解析失败")
 
-    def _fail(self, message: str) -> None:
-        was_speeding = bool(self._speed_started)
-        self._speed_busy(False)
-        self.run_button.setEnabled(True)
+    def _apply_download(self, result: Any) -> None:
+        result = result or {}
+        if result.get("ok"):
+            label = str(result.get("label") or "")
+            self.tile_down.set_value(
+                f"{result.get('mbps')} Mbps",
+                f"{result.get('mb_per_sec')} MB/s · {label}",
+            )
+            self.tile_down.setToolTip(
+                f"来源：{label}\nURL：{result.get('url')}\n用时 {result.get('seconds')} s"
+            )
+            self._add_row(
+                "下载测速",
+                f"{result.get('mbps')} Mbps",
+                f"{result.get('seconds')} s",
+                f"{label} · {format_bytes(result.get('bytes'))}",
+            )
+        else:
+            message = str(result.get("message") or "所有下载源都不可用")
+            self.tile_down.set_value("—", "失败")
+            self.tile_down.setToolTip(message)
+            self._add_row("下载测速", "失败", "—", message)
+        for failed in result.get("tried") or []:
+            self._add_row(
+                f"下载源 · {failed.get('label') or '—'}",
+                "跳过",
+                "—",
+                str(failed.get("error") or "")[:120],
+            )
+
+    def _apply_upload(self, result: Any) -> None:
+        result = result or {}
+        if result.get("ok"):
+            label = str(result.get("label") or "")
+            self.tile_up.set_value(
+                f"{result.get('mbps')} Mbps",
+                f"{result.get('mb_per_sec')} MB/s · {label}",
+            )
+            self.tile_up.setToolTip(
+                f"来源：{label}\n用时 {result.get('seconds')} s"
+                + (f"\n{result.get('note')}" if result.get("note") else "")
+            )
+            self._add_row(
+                "上传测速",
+                f"{result.get('mbps')} Mbps",
+                f"{result.get('seconds')} s",
+                str(result.get("note") or label),
+            )
+        else:
+            message = str(result.get("message") or "上传测速端点不可达")
+            self.tile_up.set_value("—", "失败")
+            self.tile_up.setToolTip(message)
+            self._add_row("上传测速", "失败", "—", message)
+        for failed in result.get("tried") or []:
+            self._add_row(
+                f"上传源 · {failed.get('label') or '—'}",
+                "跳过",
+                "—",
+                str(failed.get("error") or "")[:120],
+            )
+
+    def _finish(self) -> None:
+        self._running = False
+        self._timer.stop()
         self.speed_button.setEnabled(True)
-        self.download_button.setEnabled(True)
-        if was_speeding:
-            self.speed_hint.setText("测速失败")
-        Toast.error(self, "诊断失败", (message or "").splitlines()[0])
+        self.speed_button.setText("开始测试")
+        self.progress.setValue(len(self._steps))
+        self.progress.setVisible(False)
+        Toast.success(self, "测试完成", "五项结果已写入上方表格，失败项可在备注中查看原因。")
+
+    def _check_timeout(self) -> None:
+        if not self._running:
+            return
+        if time.time() - self._started < DIAG_TIMEOUT_SEC:
+            return
+        current = min(self.progress.value(), len(self._steps) - 1)
+        self._run_id += 1
+        self._running = False
+        self._timer.stop()
+        self.speed_button.setEnabled(True)
+        self.speed_button.setText("开始测试")
+        self.progress.setVisible(False)
+        self._mark_failed(current, f"整轮测试超过 {int(DIAG_TIMEOUT_SEC)} 秒，已中止")
+        Toast.error(self, "测试超时", "网络诊断超过 180 秒仍未完成，请检查网络后重试。")
 
     def on_theme_changed(self) -> None:
         pass
 
 
+class _RangeDialog(QDialog):
+    """自定义时间段：选择起止日期，结束当天也计入。"""
 
+    def __init__(self, start: dt.date, end: dt.date, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("自定义时间段")
+        self.setModal(True)
+        self.setMinimumWidth(340)
 
+        box = QVBoxLayout(self)
+        box.setContentsMargins(20, 20, 20, 16)
+        box.setSpacing(12)
 
+        start_row = QHBoxLayout()
+        start_row.addWidget(StrongBodyLabel("开始日期", self))
+        self.start_edit = QDateEdit(QDate(start.year, start.month, start.day), self)
+        self.start_edit.setCalendarPopup(True)
+        self.start_edit.setDisplayFormat("yyyy-MM-dd")
+        start_row.addWidget(self.start_edit, 1)
+        box.addLayout(start_row)
 
+        end_row = QHBoxLayout()
+        end_row.addWidget(StrongBodyLabel("结束日期", self))
+        self.end_edit = QDateEdit(QDate(end.year, end.month, end.day), self)
+        self.end_edit.setCalendarPopup(True)
+        self.end_edit.setDisplayFormat("yyyy-MM-dd")
+        end_row.addWidget(self.end_edit, 1)
+        box.addLayout(end_row)
 
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        cancel = PushButton("取消", self)
+        cancel.clicked.connect(self.reject)
+        buttons.addWidget(cancel)
+        confirm = PrimaryPushButton("查看", self)
+        confirm.clicked.connect(self.accept)
+        buttons.addWidget(confirm)
+        box.addLayout(buttons)
 
-
-
-
-
-
-
-
-
-
-
-
-
+    def selected_range(self) -> tuple[dt.datetime, dt.datetime]:
+        start = self.start_edit.date().toPyDate()
+        end = self.end_edit.date().toPyDate()
+        if end < start:
+            start, end = end, start
+        return (
+            dt.datetime.combine(start, dt.time()),
+            dt.datetime.combine(end + dt.timedelta(days=1), dt.time()),
+        )
 
 
 class TrafficView(QWidget):
+    """流量统计：默认最近 7 天，可切换上一个 7 天或自定义时间段。"""
+
     def __init__(self, service, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.service = service
         self._summary = {}
         self._mode_known = False
         self._mode_retry = 0
+        self._period_index = 0
+        self._custom_range: tuple[dt.datetime, dt.datetime] | None = None
+        self._range_token = 0
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -678,12 +906,12 @@ class TrafficView(QWidget):
         chart_card = Card("用量趋势", parent=self)
         chart_row = QHBoxLayout()
         chart_row.setSpacing(8)
-        self.granularity = ComboBox(self)
-        self.granularity.addItems(["按天", "按小时"])
-        self.granularity.setCurrentIndex(0)
-        self.granularity.currentIndexChanged.connect(lambda _i: self.refresh())
-        chart_row.addWidget(StrongBodyLabel("统计粒度", self))
-        chart_row.addWidget(self.granularity)
+        chart_row.addWidget(StrongBodyLabel("时间范围", self))
+        self.period_combo = ComboBox(self)
+        self.period_combo.addItems(["最近 7 天", "上一个 7 天", "自定义…"])
+        self.period_combo.setCurrentIndex(0)
+        self.period_combo.setMinimumWidth(150)
+        chart_row.addWidget(self.period_combo)
         chart_row.addStretch(1)
         self.refresh_button = PushButton(FIF.SYNC, "刷新", self)
         self.refresh_button.clicked.connect(self.refresh)
@@ -695,8 +923,17 @@ class TrafficView(QWidget):
         self.reset_button.clicked.connect(self.reset)
         chart_row.addWidget(self.reset_button)
         chart_card.add_layout(chart_row)
-        self.chart_card = chart_card
 
+        range_tiles = QHBoxLayout()
+        range_tiles.setSpacing(12)
+        self.tile_range_total = StatTile("区间总量", "—", "未读取", parent=self)
+        self.tile_range_avg = StatTile("日均", "—", "未读取", parent=self)
+        self.tile_range_peak = StatTile("峰值单日", "—", "未读取", parent=self)
+        for tile in (self.tile_range_total, self.tile_range_avg, self.tile_range_peak):
+            range_tiles.addWidget(tile, 1)
+        chart_card.add_layout(range_tiles)
+
+        self.chart_card = chart_card
         self.chart = HistoryChart(parent=self)
         chart_card.add(self.chart)
         _insert(layout, chart_card)
@@ -706,9 +943,69 @@ class TrafficView(QWidget):
         detail.add(self.table)
         _insert(layout, detail)
 
+        self.period_combo.currentIndexChanged.connect(self._on_period_changed)
+
+    def _default_range(self) -> tuple[dt.datetime, dt.datetime]:
+        today = dt.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        return today - dt.timedelta(days=6), today + dt.timedelta(days=1)
+
+    def _current_range(self) -> tuple[dt.datetime, dt.datetime]:
+        today = dt.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        if self._period_index == 1:
+            return today - dt.timedelta(days=13), today - dt.timedelta(days=6)
+        if self._period_index == 2 and self._custom_range is not None:
+            return self._custom_range
+        return self._default_range()
+
+    def _on_period_changed(self, index: int) -> None:
+        if index == 2:
+            start, end = self._custom_range or self._default_range()
+            dialog = _RangeDialog(start.date(), (end - dt.timedelta(days=1)).date(), self)
+            if dialog.exec_():
+                self._custom_range = dialog.selected_range()
+                self._period_index = 2
+                self.refresh()
+            else:
+                self.period_combo.blockSignals(True)
+                self.period_combo.setCurrentIndex(self._period_index)
+                self.period_combo.blockSignals(False)
+            return
+        self._period_index = index
+        self.refresh()
+
+    def _fill_days(self, daily: list[dict], start: dt.datetime, end: dt.datetime) -> list[dict]:
+        """把没有记录的自然日补成 0，7 天视图才不会缺柱子。"""
+        by_key = {str(item.get("key")): item for item in daily}
+        points = []
+        cursor = start.date()
+        last = (end - dt.timedelta(days=1)).date()
+        while cursor <= last:
+            key = cursor.isoformat()
+            points.append(
+                by_key.get(key)
+                or {
+                    "key": key,
+                    "ts": dt.datetime.combine(cursor, dt.time()).timestamp(),
+                    "rx": 0,
+                    "tx": 0,
+                    "total": 0,
+                }
+            )
+            cursor += dt.timedelta(days=1)
+        return points
+
     def refresh(self) -> None:
+        self._range_token += 1
+        token = self._range_token
         run_async(self.service.traffic.summary, on_done=self._apply_summary)
-        run_async(self.service.traffic.series, None, 720, on_done=self._apply_series)
+        start, end = self._current_range()
+        run_async(
+            self.service.traffic_range,
+            start.timestamp(),
+            end.timestamp(),
+            on_done=lambda result, t=token: self._apply_range(result, t),
+            on_error=lambda message, t=token: self._range_failed(message, t),
+        )
 
     def export_csv(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
@@ -774,26 +1071,67 @@ class TrafficView(QWidget):
         self.tile_source.set_value(mode_label, hint)
         self._mode_known = bool(mode)
 
-    def _apply_series(self, series: Any) -> None:
-        items = list(series or [])
-        if self.granularity.currentIndex() == 0:
-            items = group_by_day(items)
-        items = items[-90:]
+    def _apply_range(self, result: Any, token: int | None = None) -> None:
+        if token is not None and token != self._range_token:
+            return
+        if not isinstance(result, dict):
+            self._range_failed("没有取到时间段数据")
+            return
+        summary = result.get("summary") or {}
+        series = list(result.get("series") or [])
+        start, end = self._current_range()
+        day_count = max(1, (end - start).days)
+        total = summary.get("total")
+        if total is None:
+            total = sum((item.get("total") or 0) for item in series)
+        daily = group_by_day(series)
+        range_text = f"{start:%m-%d} ~ {(end - dt.timedelta(days=1)):%m-%d}"
+
+        if not series and not total:
+            self.tile_range_total.set_value("—", "这个时间段还没有记录")
+            self.tile_range_avg.set_value("—", "这个时间段还没有记录")
+            self.tile_range_peak.set_value("—", "这个时间段还没有记录")
+            self.chart.set_data([])
+            self.chart.setToolTip("这个时间段还没有记录")
+            _fill_table(self.table, [["这个时间段还没有记录", "", "", ""]])
+            return
+
+        peak = max(daily, key=lambda item: item.get("total") or 0) if daily else None
+        self.tile_range_total.set_value(format_bytes(total), range_text)
+        self.tile_range_avg.set_value(format_bytes(total / day_count), f"共 {day_count} 天")
+        if peak:
+            self.tile_range_peak.set_value(
+                format_bytes(peak.get("total")), f"峰值 · {peak.get('key')}"
+            )
+        else:
+            self.tile_range_peak.set_value("—", "没有单日记录")
+
+        points = self._fill_days(daily, start, end) if day_count <= 62 else daily
+        points = points[-90:]
+        self.chart.setToolTip("")
         try:
-            self.chart.set_data(items, label_key="key")
+            self.chart.set_data(points, label_key="key")
         except Exception:
             pass
-        rows = [
-            [
+
+        rows = []
+        for item in reversed(points[-31:]):
+            rows.append([
                 str(item.get("key", "")),
                 format_bytes(item.get("rx")),
                 format_bytes(item.get("tx")),
                 format_bytes(item.get("total")),
-            ]
-            for item in reversed(items[-24:])
-        ]
+            ])
         _fill_table(self.table, rows)
         self.table.resizeRowsToContents()
+
+    def _range_failed(self, message: str, token: int | None = None) -> None:
+        if token is not None and token != self._range_token:
+            return
+        for tile in (self.tile_range_total, self.tile_range_avg, self.tile_range_peak):
+            tile.set_value("—", "读取失败")
+        _fill_table(self.table, [["这个时间段读取失败", "", "", ""]])
+        Toast.warning(self, "读取时间段失败", (message or "").splitlines()[0])
 
     def on_traffic(self, sample: dict) -> None:
         rx_rate = sample.get("rx_rate") or 0.0
@@ -811,6 +1149,8 @@ class TrafficView(QWidget):
             self.chart.apply_theme()
         except Exception:
             pass
+
+
 class LogsView(QWidget):
     def __init__(self, service, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -940,8 +1280,6 @@ class AccountView(QWidget):
         self.refresh_button.clicked.connect(self.refresh)
         row.addWidget(self.refresh_button)
         row.addStretch(1)
-        self.hint = caption_label("", self)
-        row.addWidget(self.hint)
         self.card.add_layout(row)
 
         tiles = QHBoxLayout()
@@ -962,6 +1300,7 @@ class AccountView(QWidget):
                 ("created", "开户时间"),
                 ("ip", "当前 IP"),
                 ("online", "在线情况"),
+                ("flow", "套餐流量"),
                 ("device_count", "在线设备"),
                 ("server", "接入设备"),
             ],
@@ -984,8 +1323,6 @@ class AccountView(QWidget):
         self.kick_others_button.clicked.connect(self.kick_others)
         dev_row.addWidget(self.kick_others_button)
         dev_row.addStretch(1)
-        self.device_hint = caption_label("", self)
-        dev_row.addWidget(self.device_hint)
         self.device_card.add_layout(dev_row)
 
         self.device_table = _make_table(["设备 MAC", "IP 地址", "上线时间", "在线时长", "会话号", "备注"])
@@ -995,11 +1332,12 @@ class AccountView(QWidget):
 
     def refresh(self) -> None:
         self.refresh_button.setEnabled(False)
-        self.hint.setText("正在读取学校侧账户数据…")
+        self.refresh_button.setText("读取中…")
         run_async(self.service.selfservice_overview, on_done=self._apply_overview, on_error=self._fail)
 
     def load_devices(self) -> None:
         self.device_button.setEnabled(False)
+        self.device_button.setText("查询中…")
         run_async(self.service.selfservice_devices, on_done=self._apply_devices, on_error=self._fail)
 
     def kick_selected(self) -> None:
@@ -1041,8 +1379,10 @@ class AccountView(QWidget):
         run_async(self.service.selfservice_down_device, session_id, on_done=done, on_error=self._fail)
     def _apply_overview(self, result: Any) -> None:
         self.refresh_button.setEnabled(True)
+        self.refresh_button.setText("刷新账户信息")
         if not (isinstance(result, dict) and result.get("ok")):
-            self.hint.setText(str((result or {}).get("message") or "读取失败，请检查账号密码"))
+            Toast.warning(self, "账户信息读取失败",
+                          str((result or {}).get("message") or "请检查账号密码"))
             return
 
         account = result.get("account") or {}
@@ -1059,6 +1399,15 @@ class AccountView(QWidget):
         online = account.get("onlineInfo") or {}
         records = online.get("records") if isinstance(online, dict) else None
         first = (records or [{}])[0] if records else {}
+        used = flow.get("used") or "—"
+        left = flow.get("flowBalanceFormat") or "—"
+        balance = account.get("balance") or "0.00"
+        self.tile_package.set_value(
+            account.get("product_name") or "—", f"余额 {balance} 元 · 剩余 {left}"
+        )
+        self.tile_expire.set_value(account.get("order_end_time") or "—", "套餐到期时间")
+        self.tile_status.set_value(status_text, "user_status=" + status if status else "—")
+        self.tile_balance.set_value(f"{balance} 元", f"套餐流量已用 {used}")
         self.grid.update_values(
             {
                 "username": account.get("username") or "—",
@@ -1067,23 +1416,21 @@ class AccountView(QWidget):
                 "created": _fmt_ts(account.get("create_time")),
                 "ip": str(first.get("FramedIPAddress") or "—"),
                 "online": ("在线" if str(online.get("status")) == "online" else "离线") if online else "—",
+                "flow": f"已用 {used} / 剩余 {left}",
                 "device_count": str(len(records or [])) + " 台",
                 "server": str(first.get("NASIPAddress") or "—"),
             }
         )
-        used = flow.get("used") or "—"
-        left = flow.get("flowBalanceFormat") or "—"
-        self.hint.setText(f"已读取：套餐流量已用 {used}，剩余 {left}；到期 {account.get('order_end_time') or '—'}")
 
         devices = _as_list(result.get("devices") or {})
         self._apply_devices({"ok": True, "devices": devices})
 
     def _apply_devices(self, result: Any) -> None:
         self.device_button.setEnabled(True)
+        self.device_button.setText("查询在线设备")
         if not (isinstance(result, dict) and result.get("ok")):
             self._devices = []
-            _fill_table(self.device_table, [])
-            self.device_hint.setText(str((result or {}).get("message") or "查询失败"))
+            _fill_table(self.device_table, [["—", "—", "—", "—", "—", str((result or {}).get("message") or "查询失败")]])
             return
         self._devices = list(result.get("devices") or [])
         current_mac = str((self.service.wifi_status() or {}).get("mac") or "").lower()
@@ -1107,11 +1454,14 @@ class AccountView(QWidget):
                 f"\n上线 {_fmt_ts(device.get('AcctStartTime'))}"
             )
         _fill_table(self.device_table, rows, tips or None)
-        self.device_hint.setText(f"共 {len(self._devices)} 台设备在线。")
+        if not rows:
+            _fill_table(self.device_table, [["—", "—", "—", "—", "—", "当前没有在线设备"]])
 
     def _fail(self, message: str) -> None:
         self.refresh_button.setEnabled(True)
+        self.refresh_button.setText("刷新账户信息")
         self.device_button.setEnabled(True)
+        self.device_button.setText("查询在线设备")
         self.kick_button.setEnabled(True)
         self.kick_others_button.setEnabled(True)
         Toast.error(self, "操作失败", (message or "").splitlines()[0])
@@ -1147,8 +1497,6 @@ class SelfServiceView(QWidget):
         self.flow_button.clicked.connect(self.load_flow)
         flow_row.addWidget(self.flow_button)
         flow_row.addStretch(1)
-        self.flow_hint = caption_label("", self)
-        flow_row.addWidget(self.flow_hint)
         self.flow_card.add_layout(flow_row)
 
         tiles = QHBoxLayout()
@@ -1188,8 +1536,6 @@ class SelfServiceView(QWidget):
         pwd_row.addWidget(self.pwd_button)
         pwd_row.addStretch(1)
         self.pwd_card.add_layout(pwd_row)
-        self.pwd_hint = caption_label("", self)
-        self.pwd_card.add(self.pwd_hint)
 
         pause_row = QHBoxLayout()
         pause_row.setSpacing(8)
@@ -1218,9 +1564,9 @@ class SelfServiceView(QWidget):
         self.order_card = Card("订单记录", parent=self)
         order_row = QHBoxLayout()
         order_row.setSpacing(8)
-        order_button = PushButton(FIF.SYNC, "刷新订单", self)
-        order_button.clicked.connect(self.load_orders)
-        order_row.addWidget(order_button)
+        self.order_button = PushButton(FIF.SYNC, "刷新订单", self)
+        self.order_button.clicked.connect(self.load_orders)
+        order_row.addWidget(self.order_button)
         order_row.addStretch(1)
         self.order_card.add_layout(order_row)
         self.order_table = _make_table(["订单号", "产品", "价格", "开始", "结束", "状态"])
@@ -1230,9 +1576,9 @@ class SelfServiceView(QWidget):
         self.bill_card = Card("账单流水", parent=self)
         bill_row = QHBoxLayout()
         bill_row.setSpacing(8)
-        bill_button = PushButton(FIF.SYNC, "刷新账单", self)
-        bill_button.clicked.connect(self.load_bills)
-        bill_row.addWidget(bill_button)
+        self.bill_button = PushButton(FIF.SYNC, "刷新账单", self)
+        self.bill_button.clicked.connect(self.load_bills)
+        bill_row.addWidget(self.bill_button)
         bill_row.addStretch(1)
         self.bill_card.add_layout(bill_row)
         self.bill_table = _make_table(["时间", "项目", "金额", "方式", "操作员"])
@@ -1246,12 +1592,10 @@ class SelfServiceView(QWidget):
         self.date_edit.setPlaceholderText("日期，如 2026-10-10（留空=今天）")
         self.date_edit.setMinimumWidth(200)
         log_row.addWidget(self.date_edit)
-        log_button = PushButton(FIF.SEARCH, "查询", self)
-        log_button.clicked.connect(self.load_net_log)
-        log_row.addWidget(log_button)
+        self.log_button = PushButton(FIF.SEARCH, "查询", self)
+        self.log_button.clicked.connect(self.load_net_log)
+        log_row.addWidget(self.log_button)
         log_row.addStretch(1)
-        self.log_hint = caption_label("", self)
-        log_row.addWidget(self.log_hint)
         self.log_card.add_layout(log_row)
         self.log_table = _make_table(["开始", "结束", "上行", "下行", "时长", "IP"])
         self.log_card.add(self.log_table)
@@ -1274,8 +1618,6 @@ class SelfServiceView(QWidget):
             button.clicked.connect(lambda _checked=False, n=name: self.load_misc(n))
             misc_row.addWidget(button)
         misc_row.addStretch(1)
-        self.misc_hint = caption_label("", self)
-        misc_row.addWidget(self.misc_hint)
         self.misc_card.add_layout(misc_row)
 
         self.misc_table = _make_table(["接口 / 项目", "结果", "说明"])
@@ -1293,12 +1635,14 @@ class SelfServiceView(QWidget):
 
     def load_flow(self) -> None:
         self.flow_button.setEnabled(False)
-        self.flow_hint.setText("正在读取…")
+        self.flow_button.setText("读取中…")
 
         def done(result: Any) -> None:
             self.flow_button.setEnabled(True)
+            self.flow_button.setText("刷新套餐")
             if not (isinstance(result, dict) and result.get("ok")):
-                self.flow_hint.setText(str((result or {}).get("message") or "读取失败"))
+                self.tile_left.set_value("—", "读取失败")
+                Toast.warning(self, "套餐流量读取失败", str((result or {}).get("message") or "读取失败"))
                 return
             data = result.get("data") or {}
             self.tile_total.set_value(data.get("totalFlowFormat") or "—", data.get("productName") or "套餐总量")
@@ -1308,13 +1652,19 @@ class SelfServiceView(QWidget):
                 str(data.get("endTime") or "—")[:10],
                 f"起 {str(data.get('startTime') or '')[:10]}",
             )
-            self.flow_hint.setText("已读取套餐流量。")
 
         run_async(self.service.selfservice_call, "flow_info", on_done=done, on_error=self._fail)
 
     def load_orders(self) -> None:
+        self.order_button.setEnabled(False)
+        self.order_button.setText("读取中…")
+
         def done(result: Any) -> None:
+            self.order_button.setEnabled(True)
+            self.order_button.setText("刷新订单")
             if not (isinstance(result, dict) and result.get("ok")):
+                _fill_table(self.order_table, [["—", "—", "—", "—", "—", "订单读取失败"]])
+                Toast.warning(self, "订单读取失败", str((result or {}).get("message") or ""))
                 return
             rows, tips = [], []
             for item in _as_list(result.get("data")):
@@ -1327,13 +1677,20 @@ class SelfServiceView(QWidget):
                     _order_status(item.get("status")),
                 ])
                 tips.append(f"订单 {item.get('order_no')}\n产品 {item.get('product_name')}\n价格 {item.get('price')} 元\n{_fmt_ts(item.get('begin_time'))} → {_fmt_ts(item.get('finish_time'))}")
-            _fill_table(self.order_table, rows, tips or None)
+            _fill_table(self.order_table, rows or [["—", "—", "—", "—", "—", "没有订单记录"]], tips or None)
 
         run_async(self.service.selfservice_call, "orders", on_done=done, on_error=self._fail)
 
     def load_bills(self) -> None:
+        self.bill_button.setEnabled(False)
+        self.bill_button.setText("读取中…")
+
         def done(result: Any) -> None:
+            self.bill_button.setEnabled(True)
+            self.bill_button.setText("刷新账单")
             if not (isinstance(result, dict) and result.get("ok")):
+                _fill_table(self.bill_table, [["—", "—", "—", "—", "账单读取失败"]])
+                Toast.warning(self, "账单读取失败", str((result or {}).get("message") or ""))
                 return
             rows, tips = [], []
             for item in _as_list(result.get("data")):
@@ -1345,17 +1702,21 @@ class SelfServiceView(QWidget):
                     str(item.get("operator") or ""),
                 ])
                 tips.append(f"{_fmt_ts(item.get('create_at'))} {item.get('name')}\n金额 {item.get('money')} 元，产品 {item.get('product_name')}")
-            _fill_table(self.bill_table, rows, tips or None)
+            _fill_table(self.bill_table, rows or [["—", "—", "—", "—", "没有账单记录"]], tips or None)
 
         run_async(self.service.selfservice_call, "bills", on_done=done, on_error=self._fail)
 
     def load_net_log(self) -> None:
         date = self.date_edit.text().strip()
-        self.log_hint.setText("正在查询…")
+        self.log_button.setEnabled(False)
+        self.log_button.setText("查询中…")
 
         def done(result: Any) -> None:
+            self.log_button.setEnabled(True)
+            self.log_button.setText("查询")
             if not (isinstance(result, dict) and result.get("ok")):
-                self.log_hint.setText(str((result or {}).get("message") or "查询失败"))
+                _fill_table(self.log_table, [["—", "—", "—", "—", "—", "查询失败"]])
+                Toast.warning(self, "上网明细查询失败", str((result or {}).get("message") or ""))
                 return
             data = result.get("data") or {}
             logs = _as_list(data.get("logs") if isinstance(data, dict) else data)
@@ -1370,15 +1731,14 @@ class SelfServiceView(QWidget):
                     str(item.get("framedipaddress") or item.get("ip") or ""),
                 ])
                 tips.append(" | ".join(str(v) for v in rows[-1]))
-            _fill_table(self.log_table, rows, tips or None)
-            self.log_hint.setText(f"共 {len(rows)} 条记录" + (f"（{data.get('curMonth')}）" if isinstance(data, dict) and data.get("curMonth") else ""))
+            _fill_table(self.log_table, rows or [["—", "—", "—", "—", "—", "这一天没有上网记录"]], tips or None)
 
         run_async(self.service.selfservice_call, "net_log", date, on_done=done, on_error=self._fail)
 
     def load_misc_all(self) -> None:
         """依次读取所有剩余只读接口，汇总成一张表。"""
         self.misc_button.setEnabled(False)
-        self.misc_hint.setText("正在依次读取…")
+        self.misc_button.setText("读取中…")
         run_async(self._collect_misc, on_done=self._apply_misc, on_error=self._fail)
 
     def _collect_misc(self) -> list[dict]:
@@ -1410,6 +1770,7 @@ class SelfServiceView(QWidget):
 
     def _apply_misc(self, rows: Any) -> None:
         self.misc_button.setEnabled(True)
+        self.misc_button.setText("读取全部")
         table_rows, tips = [], []
         for item in rows or []:
             data = item.get("data")
@@ -1421,13 +1782,15 @@ class SelfServiceView(QWidget):
             ])
             tips.append(f"{item['label']}（{item['desc']}）\n{summary or item.get('message') or ''}")
         _fill_table(self.misc_table, table_rows, tips or None)
-        self.misc_hint.setText(f"已读取 {len(table_rows)} 个接口。")
+        if not table_rows:
+            _fill_table(self.misc_table, [["—", "没有数据", "这些接口当前都没有返回内容"]])
         self.load_captcha()
 
     def load_misc(self, name: str) -> None:
         def done(result: Any) -> None:
             data = (result or {}).get("data")
-            self.misc_hint.setText(f"{name}：{_summarize(name, data) or (result or {}).get('message') or '无数据'}")
+            summary = _summarize(name, data) or (result or {}).get("message") or "无数据"
+            Toast.info(self, name, summary)
 
         run_async(self.service.selfservice_call, name, on_done=done, on_error=self._fail)
 
@@ -1454,18 +1817,17 @@ class SelfServiceView(QWidget):
             Toast.warning(self, "请输入验证码", "点验证码图片可以换一张。")
             return
         self.pwd_button.setEnabled(False)
-        self.pwd_hint.setText("正在提交…")
+        self.pwd_button.setText("修改中…")
 
         def done(result: Any) -> None:
             self.pwd_button.setEnabled(True)
+            self.pwd_button.setText("修改密码")
             if isinstance(result, dict) and result.get("ok"):
-                self.pwd_hint.setText("密码已修改，本机保存的密码也已同步更新。")
                 Toast.success(self, "密码已修改", "请记住新密码，下次认证将使用它。")
                 self.new_pwd.clear()
                 self.captcha_edit.clear()
             else:
                 message = str((result or {}).get("message") or "修改失败")
-                self.pwd_hint.setText(message)
                 Toast.warning(self, "修改未成功", message)
                 self.load_captcha()
 
@@ -1499,7 +1861,16 @@ class SelfServiceView(QWidget):
 
     def _fail(self, message: str) -> None:
         self.flow_button.setEnabled(True)
+        self.flow_button.setText("刷新套餐")
         self.pwd_button.setEnabled(True)
+        self.pwd_button.setText("修改密码")
+        for button in (self.order_button, self.bill_button, self.log_button):
+            button.setEnabled(True)
+        self.order_button.setText("刷新订单")
+        self.bill_button.setText("刷新账单")
+        self.log_button.setText("查询")
+        self.misc_button.setEnabled(True)
+        self.misc_button.setText("读取全部")
         Toast.error(self, "操作失败", (message or "").splitlines()[0])
 
     def on_theme_changed(self) -> None:

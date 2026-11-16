@@ -38,7 +38,7 @@ from ..formatting import (
     state_meta,
 )
 from ..toasts import Toast
-from ..widgets import Card, KVGrid, StatTile, caption_label, divider, scroll_page
+from ..widgets import Card, KVGrid, StatTile, divider, scroll_page
 
 
 CONTENT_MAX_WIDTH = 1000
@@ -60,6 +60,7 @@ class HomePage(QWidget):
         self._busy_since = 0.0
 
         self._manual_action = False
+        self._last_failed = False
 
         self._notice_busy = False
         self._notice_ok = False
@@ -118,8 +119,13 @@ class HomePage(QWidget):
         title_row.addWidget(self.portal_button)
         self.status_card.add_layout(title_row)
 
-        self.status_hint = caption_label("", self)
-        self.status_card.add(self.status_hint)
+        # 状态说明直接放在主状态区里，用正常字号的正文，而不是卡片底部的一行 12px 灰字。
+        self.status_detail = BodyLabel("", self)
+        self.status_detail.setWordWrap(True)
+        self.status_detail.setTextColor(
+            theme.color("text_secondary"), theme.color("text_secondary")
+        )
+        self.status_card.add(self.status_detail)
 
         self.busy_bar = IndeterminateProgressBar(self)
         self.busy_bar.setVisible(False)
@@ -146,9 +152,6 @@ class HomePage(QWidget):
         self.notice_text.setWordWrap(True)
         self.notice_text.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.notice_card.add(self.notice_text)
-        self.notice_hint = caption_label("", self)
-        self.notice_hint.setVisible(False)
-        self.notice_card.add(self.notice_hint)
 
         self.notice_button = PushButton(FIF.SYNC, "刷新", self)
         self.notice_button.setVisible(False)
@@ -168,6 +171,8 @@ class HomePage(QWidget):
 
         self.chart = LiveChart(parent=self)
         self.live_card.add(self.chart)
+        self._chart_empty_text = ""
+        self._set_chart_empty("等待采样…")
         layout.addWidget(self.live_card)
 
         self.usage_card = Card("流量用量", parent=self)
@@ -188,16 +193,27 @@ class HomePage(QWidget):
         head = QHBoxLayout()
         self.quota_caption = StrongBodyLabel("套餐用量", self)
         head.addWidget(self.quota_caption)
+        self.quota_setup_button = PushButton(FIF.SETTING, "去设置", self)
+        self.quota_setup_button.clicked.connect(self._goto_settings)
+        self.quota_setup_button.setToolTip("在「设置 → 套餐流量」里填写每月套餐额度")
+        self.quota_setup_button.setVisible(False)
+        head.addWidget(self.quota_setup_button)
         head.addStretch(1)
-        self.quota_value = CaptionLabel("未设置套餐", self)
-        self.quota_value.setTextColor(theme.color("text_muted"), theme.color("text_muted"))
+        self.quota_value = BodyLabel("读取中…", self)
+        self.quota_value.setTextColor(
+            theme.color("text_secondary"), theme.color("text_secondary")
+        )
         head.addWidget(self.quota_value)
         quota_box.addLayout(head)
         self.quota_bar = ProgressBar(self)
         self.quota_bar.setValue(0)
+        self.quota_bar.setTextVisible(False)
+        self.quota_bar.setToolTip("套餐进度只统计校园网内的流量")
         quota_box.addWidget(self.quota_bar)
-        self.quota_hint = caption_label("", self)
-        quota_box.addWidget(self.quota_hint)
+        # 最近一次算出的月度校园网用量，以及学校套餐信息（用来判断「不限量」）。
+        self._month_total = 0.0
+        self._package = {}
+        self._set_quota_display("读取中…", "正在读取本月校园网用量")
         self.usage_card.add(self.quota_row)
         layout.addWidget(self.usage_card)
 
@@ -211,8 +227,6 @@ class HomePage(QWidget):
         self.package_more.clicked.connect(lambda: self._goto_tools("selfservice"))
         package_row.addWidget(self.package_more)
         package_row.addStretch(1)
-        self.package_hint = caption_label("", self)
-        package_row.addWidget(self.package_hint)
         self.package_card.add_layout(package_row)
 
         package_tiles = QHBoxLayout()
@@ -236,9 +250,8 @@ class HomePage(QWidget):
     def _load_initial(self) -> None:
         run_async(self.service.get_config, on_done=lambda _c: self.refresh_summary())
         run_async(self.service.traffic.ring, on_done=self._apply_ring)
+        # 卡片可见时 set_package_visible 自己会去刷新，避免启动时重复请求一次。
         self.set_package_visible(bool(self.service.settings.home_show_package))
-        if self.service.settings.home_show_package:
-            self.refresh_package()
         self.notice_card.setVisible(bool(self.service.settings.home_show_notice))
         if self.service.settings.home_show_notice:
             self._notice_retry = 0
@@ -286,26 +299,35 @@ class HomePage(QWidget):
             lines.append(text)
 
         if lines:
-            self.notice_text.setText("\n".join(lines))
-            self.notice_text.setToolTip("")
-            self.notice_hint.setText("")
             self._notice_ok = True
+            self._set_notice_body(lines)
             return
         self._notice_failed(str((data.get("notice") or {}).get("message") or "暂时没有公告"))
+
+    def _set_notice_body(self, lines: list[str]) -> None:
+        """公告正文最多两行，全文放 tooltip —— 提示由卡片自己表达。"""
+        full = chr(10).join(lines)
+        shown = lines[:2] + (["…"] if len(lines) > 2 else [])
+        self.notice_text.setText(chr(10).join(shown).strip())
+        self.notice_text.setToolTip(full)
+        metrics = self.notice_text.fontMetrics()
+        self.notice_text.setMaximumHeight(metrics.lineSpacing() * 2 + 6)
+        self.notice_card.setVisible(True)
 
     def _notice_failed(self, message: str = "") -> None:
         self._notice_busy = False
         self.notice_button.setEnabled(True)
         retry = getattr(self, "_notice_retry", 0)
+        reason = (message or "").splitlines()[0] if message else ""
         if retry < 8 and not getattr(self, "_notice_ok", False):
             self._notice_retry = retry + 1
-            self.notice_text.setText("读取中…")
-            self.notice_hint.setText((message or "").splitlines()[0] if message else "")
+            self.notice_text.setText("正在读取公告…")
+            self.notice_text.setToolTip(reason or "网络就绪后会自动重新读取公告")
+            self.notice_card.setVisible(True)
             QTimer.singleShot(15000, self.refresh_notice)
-        else:
-            self.notice_text.setText("暂无公告")
-            self.notice_hint.setText((message or "").splitlines()[0] if message else "")
             return
+        # 没有公告就不留这张卡：一张只有提示文字的空卡片没有意义。
+        self.notice_card.setVisible(False)
 
     def set_package_visible(self, visible: bool) -> None:
         self.package_card.setVisible(bool(visible))
@@ -315,37 +337,41 @@ class HomePage(QWidget):
     def refresh_package(self) -> None:
         """从学校自助系统读套餐/到期/流量。"""
         self.package_button.setEnabled(False)
-        self.package_hint.setText("读取中…")
+        self.package_button.setText("读取中…")
+        run_async(
+            self.service.selfservice_overview,
+            on_done=self._apply_package,
+            on_error=lambda msg: self._apply_package({"ok": False, "message": msg}),
+        )
 
-        def done(result: Any) -> None:
-            self.package_button.setEnabled(True)
-            if not isinstance(result, dict) or not result.get("ok"):
-                self.package_hint.setText(
-                    str((result or {}).get("message") or "读取失败，可在设置里确认账号")
-                )
-                return
-            account = result.get("account") or {}
-            flow = result.get("flow") or {}
-            self.tile_package_name.set_value(
-                account.get("product_name") or "—",
-                f"余额 {account.get('balance') or '0.00'} 元",
-            )
-            self.tile_expire.set_value(account.get("order_end_time") or "—", "套餐到期")
-            self.tile_school_used.set_value(flow.get("used") or "—", "本周期已用")
+    def _apply_package(self, result: Any) -> None:
+        """把套餐结果写进指标块；失败原因进控件 tooltip（不再有底部灰字）。"""
+        self.package_button.setEnabled(True)
+        self.package_button.setText("刷新套餐")
+        if not isinstance(result, dict) or not result.get("ok"):
+            message = str((result or {}).get("message") or "读取失败，可在设置里确认账号")
+            reason = message.splitlines()[0] if message else "读取失败"
+            self.tile_package_name.set_value("读取失败", reason[:40])
+            self.package_button.setToolTip(f"套餐读取失败：{message}")
+            return
+        self.package_button.setToolTip("")
+        account = result.get("account") or {}
+        flow = result.get("flow") or {}
+        self._package = result.get("package") or {}
+        self.tile_package_name.set_value(
+            account.get("product_name") or "—",
+            f"余额 {account.get('balance') or '0.00'} 元",
+        )
+        self.tile_expire.set_value(account.get("order_end_time") or "—", "套餐到期")
+        self.tile_school_used.set_value(flow.get("used") or "—", "本周期已用")
+        if self._package.get("unlimited"):
+            self.tile_school_left.set_value("不限量", "学校套餐不限量")
+        else:
             left = flow.get("flowBalanceFormat") or "—"
             self.tile_school_left.set_value(
                 left, f"总量 {flow.get('totalFlowFormat') or '—'}"
             )
-            self.package_hint.setText("")
-
-        run_async(
-            self.service.selfservice_overview,
-            on_done=done,
-            on_error=lambda msg: (
-                self.package_button.setEnabled(True),
-                self.package_hint.setText((msg or "").splitlines()[0]),
-            ),
-        )
+        self._render_quota()
 
     def _goto_tools(self, segment: str) -> None:
         """跳到网络工具的某个分区。"""
@@ -354,6 +380,18 @@ class HomePage(QWidget):
         target = getattr(self._window, "account_page", None)
         if target is not None:
             self._window.switchTo(target)
+
+    def _goto_settings(self) -> None:
+        """去设置里填套餐额度；页面没有导航能力时就只用 Toast 提示。"""
+        switch_to = getattr(self._window, "switch_to", None)
+        if callable(switch_to):
+            switch_to("settings")
+            return
+        target = getattr(self._window, "settings_page", None)
+        if target is not None and self._window is not None:
+            self._window.switchTo(target)
+            return
+        Toast.info(self, "去设置", "请在「设置 → 套餐流量」里填写每月套餐额度。")
 
     def _tick_online(self) -> None:
         """每秒刷新「在线时长」。
@@ -378,6 +416,7 @@ class HomePage(QWidget):
     def _apply_ring(self, ring: Any) -> None:
         if isinstance(ring, list) and ring:
             self.chart.load_history(ring)
+            self._set_chart_empty("")
 
     def _apply_summary(self, summary: Any) -> None:
         if not isinstance(summary, dict):
@@ -388,6 +427,7 @@ class HomePage(QWidget):
         alltime = summary.get("all") or {}
         session = summary.get("session") or {}
         live = summary.get("live") or {}
+        self.tile_today.reset_color()
 
         self.tile_today.set_value(
             format_bytes(today.get("total")),
@@ -425,7 +465,48 @@ class HomePage(QWidget):
             hint = summary.get("retry_hint") or "流量计数器读取失败"
             self.tile_today.set_color(theme.color("warn"))
             self.tile_today.set_value("读取失败", str(hint)[:40])
+            self._set_quota_display("读取失败", str(hint))
             return
+
+    def _set_quota_display(self, text: str, tooltip: str = "", percent: float = 0.0) -> None:
+        """配额文案写进进度条自身：format + 右侧数值 + tooltip，不再用底部灰字。"""
+        self.quota_bar.setValue(max(0, min(100, int(percent))))
+        self.quota_bar.setFormat(text)
+        self.quota_bar.setToolTip(tooltip or text)
+        self.quota_value.setText(text)
+
+    def _render_quota(self) -> None:
+        """按当前套餐信息与本月用量重画套餐进度。"""
+        month_total = float(getattr(self, "_month_total", 0.0) or 0.0)
+        package = getattr(self, "_package", {}) or {}
+        if package.get("unlimited"):
+            self.quota_bar.setCustomBarColor(theme.color("accent"), theme.color("accent"))
+            self._set_quota_display("不限量套餐", "学校套餐为不限量，不统计月度配额")
+            self.quota_setup_button.setVisible(False)
+            return
+        quota_gb = float(self.service.settings.monthly_quota_gb or 0)
+        if quota_gb <= 0:
+            self.quota_bar.setCustomBarColor(theme.color("accent"), theme.color("accent"))
+            self._set_quota_display(
+                "未设置套餐额度", "在「设置 → 套餐流量」里填写每月额度后可显示进度"
+            )
+            self.quota_setup_button.setVisible(True)
+            return
+        self.quota_setup_button.setVisible(False)
+        quota_bytes = quota_gb * 1024 ** 3
+        percent = min(100.0, month_total / quota_bytes * 100 if quota_bytes else 0.0)
+        remaining = max(0.0, quota_bytes - month_total)
+        warning = percent >= 95
+        color = theme.color("error") if warning else theme.color("accent")
+        self.quota_bar.setCustomBarColor(color, color)
+        text = f"已用 {percent:.1f}% · 剩 {format_bytes(remaining)}"
+        if warning:
+            text = f"已用 {percent:.1f}% · 仅剩 {format_bytes(remaining)}"
+        self._set_quota_display(
+            text,
+            f"{format_bytes(month_total)} / {human_quota(quota_gb)}，只统计校园网内流量",
+            percent,
+        )
 
     def _apply_quota(self, month_total: float, summary: dict) -> None:
         """套餐进度。
@@ -433,27 +514,8 @@ class HomePage(QWidget):
         ``month_total`` 传进来的是**校园网内**的月度用量（见 ``service.campus_usage()``）——
         校园网以外的网络（家里 WiFi、手机热点）产生的流量不计入套餐。
         """
-        quota_gb = float(self.service.settings.monthly_quota_gb or 0)
-        self.quota_hint.setToolTip("套餐进度只统计校园网内的流量")
-        if quota_gb <= 0:
-            self.quota_bar.setValue(0)
-            self.quota_value.setText("暂无套餐")
-            self.quota_hint.setText("连上校园网后自动读取")
-            return
-        quota_bytes = quota_gb * 1024 ** 3
-        percent = int(min(100, month_total / quota_bytes * 100 if quota_bytes else 0))
-        self.quota_bar.setValue(percent)
-        self.quota_value.setText(
-            f"{format_bytes(month_total)} / {human_quota(quota_gb)}（{percent}%）"
-        )
-        remaining = max(0.0, quota_bytes - month_total)
-        if percent >= 95:
-            self.quota_hint.setText(f"⚠ 即将用尽，剩 {format_bytes(remaining)}")
-            return
-        if percent >= 80:
-            self.quota_hint.setText(f"已用 {percent}%，剩 {format_bytes(remaining)}")
-            return
-        self.quota_hint.setText(f"剩 {format_bytes(remaining)}")
+        self._month_total = float(month_total or 0.0)
+        self._render_quota()
 
     def _update_live_tiles(self, rx_rate: float, tx_rate: float) -> None:
         self.tile_rx.set_value(format_rate(rx_rate))
@@ -473,8 +535,9 @@ class HomePage(QWidget):
         无网/没信号时也走这一条路：``service.tick`` 会先扫描、必要时把发现的校园网
         自动加入名单并连上，连不上外网还会换一个校园网再试一次。
         """
-        self._set_busy(True, "正在检测并登录：会自动搜寻校园网、连接、认证…")
         self._manual_action = True
+        self._last_failed = False
+        self._set_busy(True, "正在检测并登录：会自动搜寻校园网、连接、认证…")
         self.connect_button.setEnabled(False)
 
         def done(result: Any) -> None:
@@ -484,20 +547,24 @@ class HomePage(QWidget):
             self.refresh_summary()
             if isinstance(result, dict):
                 if result.get("state") == "online" or result.get("ok"):
+                    self._last_failed = False
                     Toast.success(self, "已联网", "认证完成，可以正常上网了。")
                 elif result.get("skipped"):
                     Toast.info(self, "已跳过", str(result.get("message", "")))
                 else:
+                    self._last_failed = True
                     label = result.get("label") or "未联网"
                     Toast.warning(
                         self,
                         "未能联网",
                         f"当前状态：{label}。可在「网络工具 → 无线网络」里手动选网络。",
                     )
+            self._sync_connect_button()
             self._request_state()
 
         def failed(message: str) -> None:
             self._manual_action = False
+            self._last_failed = True
             self._set_busy(False)
             self.connect_button.setEnabled(True)
             Toast.error(
@@ -505,17 +572,19 @@ class HomePage(QWidget):
                 "检测失败",
                 message.splitlines()[0] if message else "未知错误",
             )
+            self._sync_connect_button()
 
         run_async(lambda: self.service.tick(manual=True), on_done=done, on_error=failed)
 
     def run_switch_network(self) -> None:
         """手动换一个校园网（优先切到信号更强的那个）。"""
-        self._set_busy(True, "正在扫描并切换到其它校园网…")
         self._manual_action = True
+        self._set_busy(True, "正在扫描并切换到其它校园网…")
 
         def done(result: Any) -> None:
             self._manual_action = False
             self._set_busy(False)
+            self._sync_connect_button()
             self._request_state()
             if isinstance(result, dict) and result.get("ok"):
                 Toast.success(self, "已切换", f"当前连接：{result.get('ssid', '')}")
@@ -530,6 +599,7 @@ class HomePage(QWidget):
         def failed(message: str) -> None:
             self._manual_action = False
             self._set_busy(False)
+            self._sync_connect_button()
             Toast.error(self, "切换失败", (message or "").splitlines()[0])
 
         run_async(self.service.switch_network, on_done=done, on_error=failed)
@@ -541,15 +611,56 @@ class HomePage(QWidget):
     def _set_busy(self, busy: bool, text: str = "") -> None:
         """兼容旧调用：立即设置忙碌态与提示文案。"""
         self._busy_since = time.time() if busy else 0.0
-        if not busy:
-            self._update_busy(False)
-        else:
-            self._maybe_show_busy()
+        if busy:
+            # 手动操作不一定立刻有 busy 的状态推送，这里自己也排一次显示。
+            QTimer.singleShot(400, self._maybe_show_busy)
+        self._update_busy(busy)
         if text:
-            self.status_hint.setText(text)
-            self._painted["hint"] = text
+            self._set_status_detail(text)
+        self._sync_connect_button()
+
+    def _set_status_detail(self, text: str) -> None:
+        """状态说明用正常字号的一行（BodyLabel）表达，并同步为按钮 tooltip。"""
+        if self._painted.get("detail") != text:
+            self._painted["detail"] = text
+            self.status_detail.setText(text)
+        self.connect_button.setToolTip(text)
+
+    def _sync_connect_button(self) -> None:
+        """主按钮文案随状态变化：按钮本身就是最直接的状态表达。"""
+        state_key = (self._state or {}).get("state", "")
+        busy = bool((self._state or {}).get("busy")) or self._manual_action
+        if busy:
+            text = "正在认证…"
+        elif state_key == "online":
+            text = "重新认证"
+        elif self._last_failed:
+            text = "重试"
+        else:
+            text = "检测并登录"
+        if self._painted.get("button") != text:
+            self._painted["button"] = text
+            self.connect_button.setText(text)
+        self.connect_button.setEnabled(not busy)
+
+    def _set_chart_empty(self, text: str) -> None:
+        """图表没有采样时，把「等待采样…」写在图表内部（标题行），而不是卡片底部灰字。"""
+        self._chart_empty_text = text
+        try:
+            if text:
+                self.chart.plot.setTitle(
+                    text, color=theme.color("text_secondary"), size="10pt"
+                )
+            else:
+                self.chart.plot.setTitle(None)
+        except Exception:
+            pass
 
     def on_state(self, state: dict) -> None:
+        """状态推送（对外入口，实际逻辑在 ``_apply_state``）。"""
+        self._apply_state(state)
+
+    def _apply_state(self, state: dict) -> None:
         """状态推送。
 
         这里刻意做了**去抖**：后台每 15 秒都会例行检测一次，如果把每个字段都无条件
@@ -561,6 +672,9 @@ class HomePage(QWidget):
         self._state = state
 
         state_key = state.get("state", "")
+        if state_key == "online":
+            # 后台守护任务把网络恢复了就不用再显示「重试」。
+            self._last_failed = False
         meta = state_meta(state_key)
         color = meta["color"]
         if theme.is_dark():
@@ -608,13 +722,10 @@ class HomePage(QWidget):
             hint = state.get("label") or "正在处理…"
         else:
             hint = "点「检测并登录」开始：程序会自动搜寻校园网、连接、提交认证并复测。"
-        if self._painted.get("hint") != hint:
-            self._painted["hint"] = hint
-            self.status_hint.setText(hint)
+        self._set_status_detail(hint)
 
-        busy = bool(state.get("busy"))
-        self.connect_button.setEnabled(not busy)
-        self._update_busy(busy)
+        self._update_busy(bool(state.get("busy")))
+        self._sync_connect_button()
 
     def _update_busy(self, busy: bool) -> None:
         """忙碌指示。
@@ -639,7 +750,8 @@ class HomePage(QWidget):
             return
 
     def _maybe_show_busy(self) -> None:
-        if not self._busy_since or not (self._state or {}).get("busy"):
+        busy = bool((self._state or {}).get("busy")) or self._manual_action
+        if not self._busy_since or not busy:
             return
         if time.time() - self._busy_since < 0.4:
             return
@@ -654,6 +766,8 @@ class HomePage(QWidget):
         rx_rate = sample.get("rx_rate") or 0.0
         tx_rate = sample.get("tx_rate") or 0.0
         self.chart.append(rx_rate, tx_rate)
+        if self._chart_empty_text:
+            self._set_chart_empty("")
         self._update_live_tiles(rx_rate, tx_rate)
 
     def on_theme_changed(self) -> None:
@@ -661,7 +775,16 @@ class HomePage(QWidget):
             self.chart.apply_theme()
         except Exception:
             pass
-        self.quota_value.setTextColor(theme.color("text_muted"), theme.color("text_muted"))
+        self.quota_value.setTextColor(
+            theme.color("text_secondary"), theme.color("text_secondary")
+        )
+        self.status_detail.setTextColor(
+            theme.color("text_secondary"), theme.color("text_secondary")
+        )
+        if self._chart_empty_text:
+            text = self._chart_empty_text
+            self._chart_empty_text = ""
+            self._set_chart_empty(text)
         if self._state:
             self.on_state(self._state)
 

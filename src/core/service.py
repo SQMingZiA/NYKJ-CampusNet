@@ -138,6 +138,8 @@ class Service(QObject):
             interval_ms=int(self.settings.traffic_interval_ms),
             logger=self.log,
         )
+        # 默认只统计校园网内的流量（traffic_only_campus）。
+        self.traffic.record_gate = self._traffic_record_allowed
 
         self._state = {
             "state": STATE_IDLE,
@@ -212,6 +214,17 @@ class Service(QObject):
 
     def _on_traffic_sample(self, sample: dict) -> None:
         """（保留钩子）采样到达界面线程后的处理。"""
+
+    def _traffic_record_allowed(self) -> bool:
+        """当前是否属于「校园网环境」——决定这次流量差值要不要记账。"""
+        if not bool(self.settings.traffic_only_campus):
+            return True
+        if self._online_since:
+            return True
+        ssid = str(self._state.get("ssid") or "")
+        if not ssid:
+            return False
+        return wifi.any_ssid_matches(ssid, list(self.settings.wifi_allow_list or []))
 
     def start(self) -> None:
         self.log("info", f"数据目录：{self.settings.data_dir}")
@@ -855,6 +868,19 @@ class Service(QObject):
     def auto_launch_state(self) -> dict[str, Any]:
         """开机自启的**真实**状态（直接查系统，不看配置项）。"""
         return autostart.state()
+
+    def traffic_range(self, start_ts: float, end_ts: float) -> dict[str, Any]:
+        """任意时间段的用量与曲线（首页的「近 7 天 / 上一个 7 天 / 自定义」）。
+
+        ``end_ts`` 不含，方便按自然日切分。
+        """
+        return {
+            "start": float(start_ts),
+            "end": float(end_ts),
+            "summary": self.traffic.range_summary(start_ts, end_ts),
+            "series": self.traffic.range_series(start_ts, end_ts),
+            "history_start": self.traffic.summary().get("history_start"),
+        }
 
     def export_traffic_csv(self, path: str) -> dict[str, Any]:
         try:

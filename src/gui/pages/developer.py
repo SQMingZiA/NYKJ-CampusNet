@@ -40,9 +40,10 @@ from qfluentwidgets import (
     PushButton,
 )
 
+from .. import theme
 from ..async_task import run_async
 from ..toasts import Toast
-from ..widgets import Card, KVGrid, caption_label, scroll_page
+from ..widgets import Card, KVGrid, scroll_page
 
 SECRET_ENTRY = "password_plaintext"
 
@@ -193,7 +194,6 @@ class DeveloperPage(QWidget):
         left_box = QVBoxLayout(left)
         left_box.setContentsMargins(0, 0, 8, 0)
         left_box.setSpacing(6)
-        left_box.addWidget(caption_label("", left))
         self.keys = QTreeWidget(left)
         self.keys.setHeaderLabels(["分类 / 接口"])
         self.keys.setMinimumWidth(280)
@@ -209,7 +209,8 @@ class DeveloperPage(QWidget):
         right_box.setSpacing(6)
         self.detail_label = BodyLabel("在左边选一个接口", right)
         right_box.addWidget(self.detail_label)
-        self.status_label = caption_label("", right)
+        self.status_label = BodyLabel("", right)
+        self.status_label.setTextColor(theme.color("text_secondary"), theme.color("text_secondary"))
         right_box.addWidget(self.status_label)
 
         self.values = QTreeWidget(right)
@@ -638,4 +639,4 @@ def _app_version() -> str:
 
         return str(__version__)
     except Exception:
-        return "1.1.0"
+        return "1.2.0"

@@ -65,6 +65,8 @@ DEFAULTS: dict[str, Any] = {
 
     "traffic_interval_ms": 5000,
     "traffic_retention_days": 120,
+    # 默认只统计校园网内的流量：连的是手机热点/家里宽带时不写入历史与用量。
+    "traffic_only_campus": True,
     "monthly_quota_gb": 0.0,
     "monthly_start_day": 1,
 

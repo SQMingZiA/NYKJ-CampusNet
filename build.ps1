@@ -28,6 +28,7 @@ $pyargs = @(
     '--clean',
     '--onefile',
     '--windowed',
+    '--uac-admin',
     '--name', 'CampusNet',
     '--icon', 'resources\app.ico',
     '--add-data', 'resources;resources',
