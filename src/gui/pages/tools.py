@@ -29,6 +29,7 @@ from PyQt5.QtWidgets import (
 from qfluentwidgets import (
     BodyLabel,
     ComboBox,
+    CompactDateEdit,
     FluentIcon as FIF,
     HyperlinkButton,
     LineEdit,
@@ -1567,26 +1568,27 @@ class SelfServiceView(QWidget):
         self.log_card = Card("上网明细", parent=self)
         log_row = QHBoxLayout()
         log_row.setSpacing(8)
-        self.date_edit = QDateEdit(self)
-        self.date_edit.setCalendarPopup(True)
+        self.date_edit = CompactDateEdit(self)
         self.date_edit.setDisplayFormat("yyyy-MM-dd")
         self.date_edit.setDate(QDate.currentDate())
-        self.date_edit.setMaximumDate(QDate.currentDate())
-        self.date_edit.setMinimumDate(QDate(2015, 1, 1))
-        self.date_edit.setMinimumWidth(140)
+        self.date_edit.setDateRange(QDate(2015, 1, 1), QDate.currentDate())
+        self.date_edit.setFixedWidth(136)
+        self.date_edit.setFixedHeight(32)
         log_row.addWidget(self.date_edit)
         self.today_button = PushButton("今天", self)
+        self.today_button.setFixedHeight(32)
         self.today_button.clicked.connect(lambda: self._set_log_date(0))
         log_row.addWidget(self.today_button)
         self.yesterday_button = PushButton("昨天", self)
+        self.yesterday_button.setFixedHeight(32)
         self.yesterday_button.clicked.connect(lambda: self._set_log_date(1))
         log_row.addWidget(self.yesterday_button)
-        self.log_button = PushButton(FIF.SEARCH, "查询", self)
+        self.log_button = PrimaryPushButton(FIF.SEARCH, "查询", self)
+        self.log_button.setFixedHeight(32)
         self.log_button.clicked.connect(self.load_net_log)
         log_row.addWidget(self.log_button)
         log_row.addStretch(1)
-        self.log_summary = StrongBodyLabel("", self)
-        self.log_summary.setTextColor(theme.color("text_muted"), theme.color("text_muted"))
+        self.log_summary = BodyLabel("", self)
         log_row.addWidget(self.log_summary)
         self.log_card.add_layout(log_row)
         self.log_table = _make_table(["开始", "结束", "时长", "上传", "下载", "合计", "IP", "设备(MAC)"])
@@ -1618,39 +1620,55 @@ class SelfServiceView(QWidget):
 
         self.misc_card.hide()
 
-        self.pause_card = Card("账户状态", "不常用；学校端可能已停用", parent=self)
+        self.pause_card = Card("账户状态", parent=self)
         pause_head = QHBoxLayout()
         pause_head.setSpacing(8)
         self.pause_toggle = PushButton(FIF.CHEVRON_DOWN_MED, "展开账户状态操作", self)
+        self.pause_toggle.setToolTip("申请暂停 / 恢复使用；学校端可能已停用，仅在确实需要时展开")
         self.pause_toggle.clicked.connect(self._toggle_pause_panel)
         pause_head.addWidget(self.pause_toggle)
         pause_head.addStretch(1)
         self.pause_card.add_layout(pause_head)
 
         self.pause_panel = QWidget(self)
-        pause_panel_layout = QHBoxLayout(self.pause_panel)
+        pause_panel_layout = QVBoxLayout(self.pause_panel)
         pause_panel_layout.setContentsMargins(0, 0, 0, 0)
-        pause_panel_layout.setSpacing(8)
-        self.pause_button = PushButton("申请暂停", self)
+        pause_panel_layout.setSpacing(10)
+
+        pause_row = QHBoxLayout()
+        pause_row.setSpacing(8)
+        self.pause_button = PushButton("申请暂停", self.pause_panel)
+        self._style_pause_button()
         self.pause_button.clicked.connect(lambda: self._pause(True))
-        pause_panel_layout.addWidget(self.pause_button)
-        self.resume_button = PushButton(FIF.CONNECT, "恢复使用", self)
+        pause_row.addWidget(self.pause_button)
+        self.resume_button = PushButton(FIF.CONNECT, "恢复使用", self.pause_panel)
         self.resume_button.clicked.connect(lambda: self._pause(False))
-        pause_panel_layout.addWidget(self.resume_button)
+        pause_row.addWidget(self.resume_button)
+        pause_row.addStretch(1)
+        pause_panel_layout.addLayout(pause_row)
+
         pause_note = BodyLabel(
-            "暂停 / 恢复由学校自助系统受理，但当前学校端接口已停用（提交后无响应）。"
-            "如需停机或恢复，请在自助系统「售后服务」里在线联系校园网服务中心，或到网络中心现场办理。",
+            "暂停 / 恢复由学校自助系统受理，当前学校端接口已停用（提交后无响应）。",
             self.pause_panel,
         )
-        pause_note.setTextColor(theme.color("text_secondary"), theme.color("text_secondary"))
-        pause_note.setWordWrap(True)
-        pause_panel_layout.addWidget(pause_note, 1)
-        pause_link = HyperlinkButton(
-            "http://10.100.2.2/after_service.html",
-            "在线联系校园网服务中心",
-            self.pause_panel,
+        pause_note.setWordWrap(False)
+        pause_panel_layout.addWidget(pause_note)
+
+        note_row = QHBoxLayout()
+        note_row.setSpacing(8)
+        note_row.addWidget(
+            BodyLabel("如需停机或恢复，可通过自助系统联系校园网服务中心：", self.pause_panel)
         )
-        pause_panel_layout.addWidget(pause_link)
+        note_row.addWidget(
+            HyperlinkButton(
+                "http://10.100.2.2/after_service.html",
+                "在线联系校园网服务中心",
+                self.pause_panel,
+            )
+        )
+        note_row.addStretch(1)
+        pause_panel_layout.addLayout(note_row)
+
         self.pause_card.add(self.pause_panel)
         self.pause_panel.hide()
         _insert(layout, self.pause_card)
@@ -1741,6 +1759,29 @@ class SelfServiceView(QWidget):
         """快捷切换上网明细日期并立即查询。"""
         self.date_edit.setDate(QDate.currentDate().addDays(-days_ago))
         self.load_net_log()
+
+    def _style_pause_button(self) -> None:
+        """把「申请暂停」画成红色描边按钮：会立刻断网的动作必须一眼可辨。"""
+        from PyQt5.QtGui import QColor
+        from qfluentwidgets import setCustomStyleSheet
+
+        try:
+            self.pause_button.setIcon(
+                FIF.POWER_BUTTON.colored(QColor("#c42b1c"), QColor("#ff99a4"))
+            )
+        except Exception:
+            self.pause_button.setIcon(FIF.POWER_BUTTON)
+        setCustomStyleSheet(
+            self.pause_button,
+            "PushButton{color:#c42b1c;border:1px solid #c42b1c;background-color:transparent;}"
+            "PushButton:hover{color:#c42b1c;border:1px solid #c42b1c;background-color:rgba(196,43,28,0.08);}"
+            "PushButton:pressed{color:#a02316;border:1px solid #a02316;background-color:rgba(196,43,28,0.16);}"
+            "PushButton:disabled{color:rgba(196,43,28,0.45);border:1px solid rgba(196,43,28,0.45);background-color:transparent;}",
+            "PushButton{color:#ff99a4;border:1px solid #ff99a4;background-color:transparent;}"
+            "PushButton:hover{color:#ff99a4;border:1px solid #ff99a4;background-color:rgba(255,153,164,0.12);}"
+            "PushButton:pressed{color:#ffb3bb;border:1px solid #ffb3bb;background-color:rgba(255,153,164,0.20);}"
+            "PushButton:disabled{color:rgba(255,153,164,0.45);border:1px solid rgba(255,153,164,0.45);background-color:transparent;}",
+        )
 
     def _toggle_pause_panel(self) -> None:
         show = self.pause_panel.isHidden()

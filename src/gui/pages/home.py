@@ -305,14 +305,28 @@ class HomePage(QWidget):
         self._notice_failed(str((data.get("notice") or {}).get("message") or "暂时没有公告"))
 
     def _set_notice_body(self, lines: list[str]) -> None:
-        """公告正文最多两行，全文放 tooltip —— 提示由卡片自己表达。"""
+        """公告全文展示；卡片高度按实际换行行数计算，避免长公告被截断。"""
         full = chr(10).join(lines)
-        shown = lines[:2] + (["…"] if len(lines) > 2 else [])
-        self.notice_text.setText(chr(10).join(shown).strip())
+        self.notice_text.setText(full)
         self.notice_text.setToolTip(full)
-        metrics = self.notice_text.fontMetrics()
-        self.notice_text.setMaximumHeight(metrics.lineSpacing() * 2 + 6)
         self.notice_card.setVisible(True)
+        QTimer.singleShot(0, self._fit_notice_height)
+
+    def _fit_notice_height(self) -> None:
+        """按卡片实际宽度把换行后的文本高度算出来（CardWidget 不传播 heightForWidth）。"""
+        text = self.notice_text.text()
+        if not text:
+            return
+        width = max(240, self.notice_card.width() - 48)
+        metrics = self.notice_text.fontMetrics()
+        rect = metrics.boundingRect(0, 0, width, 20000, Qt.TextWordWrap, text)
+        self.notice_text.setFixedHeight(max(rect.height() + 2, metrics.lineSpacing() + 2))
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        card = getattr(self, "notice_card", None)
+        if card is not None and card.isVisible():
+            QTimer.singleShot(0, self._fit_notice_height)
 
     def _notice_failed(self, message: str = "") -> None:
         self._notice_busy = False
@@ -324,6 +338,7 @@ class HomePage(QWidget):
             self.notice_text.setText("正在读取公告…")
             self.notice_text.setToolTip(reason or "网络就绪后会自动重新读取公告")
             self.notice_card.setVisible(True)
+            QTimer.singleShot(0, self._fit_notice_height)
             QTimer.singleShot(15000, self.refresh_notice)
             return
         # 没有公告就不留这张卡：一张只有提示文字的空卡片没有意义。
