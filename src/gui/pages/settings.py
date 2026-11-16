@@ -10,11 +10,12 @@ import platform
 from pathlib import Path
 from typing import Any
 
-from PyQt5.QtCore import QTimer, QUrl
-from PyQt5.QtGui import QDesktopServices
+from PyQt5.QtCore import Qt, QTimer, QUrl
+from PyQt5.QtGui import QDesktopServices, QIcon
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QTableWidgetItem,
@@ -22,13 +23,15 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 from qfluentwidgets import (
+    CaptionLabel,
     FluentIcon as FIF,
     HyperlinkButton,
+    IconWidget,
     LineEdit,
     PushButton,
     SettingCardGroup,
-    StrongBodyLabel,
     TableWidget,
+    TitleLabel,
 )
 
 from .. import theme
@@ -44,8 +47,18 @@ from ..widgets import (
     SwitchRow,
     TextRow,
     body_label,
+    caption_label,
+    divider,
     scroll_page,
 )
+
+from ...core.deps import resource_path
+from ...core.settings import APP_NAME_MAX, display_name
+
+# qfluentwidgets 1.11 还没有 RENAME 图标；用同样表示「重命名」的 EDIT 顶上。
+# 新版本一旦提供官方 FIF.RENAME，就优先使用官方图标。
+if not hasattr(FIF, 'RENAME'):
+    FIF.RENAME = FIF.EDIT
 
 # 仓库地址：换成你自己的 GitHub 仓库即可。
 GITHUB_URL = "https://github.com/campusnet/CampusNet"
@@ -85,6 +98,14 @@ THEMES = [
 DEFAULT_SSIDS = ['NYKJ', 'CMCC-NYKJ', 'CMCCNYKJ', 'NYKY']
 
 
+def _about_section(text: str, parent: QWidget | None = None) -> CaptionLabel:
+    """「关于」卡片里的小栏目标题（弱化色 + 半粗）。"""
+    label = CaptionLabel(text, parent)
+    label.setTextColor(theme.color('text_muted'), theme.color('text_muted'))
+    label.setStyleSheet('font-weight: 600;')
+    return label
+
+
 class SettingsPage(QWidget):
     """设置页。"""
 
@@ -117,8 +138,7 @@ class SettingsPage(QWidget):
         self.username_row = TextRow(
             FIF.PEOPLE,
             '校园网账号',
-            '只填号码本身（校园卡手机号），不要带「例如」这类提示文字',
-            placeholder='例如 16697763375',
+            '校园卡手机号，只填号码本身',
             parent=account,
         )
         self.password_row = TextRow(
@@ -382,6 +402,13 @@ class SettingsPage(QWidget):
 
         # 界面与启动
         appearance = SettingCardGroup('界面与启动', self)
+        self.app_name_row = TextRow(
+            FIF.RENAME,
+            '程序名称',
+            '自定义窗口与托盘里显示的名字，留空则用默认名称',
+            placeholder='留空则使用 CampusNet',
+            parent=appearance,
+        )
         self.theme_row = ComboRow(
             FIF.PALETTE,
             '主题',
@@ -432,6 +459,7 @@ class SettingsPage(QWidget):
             parent=appearance,
         )
         for card in (
+            self.app_name_row,
             self.theme_row,
             self.mica_row,
             self.tray_row,
@@ -446,6 +474,7 @@ class SettingsPage(QWidget):
         self._register(
             appearance,
             [
+                self.app_name_row,
                 self.theme_row,
                 self.mica_row,
                 self.tray_row,
@@ -482,17 +511,57 @@ class SettingsPage(QWidget):
         self._register(maintenance, [open_dir, reset_all])
 
         # 关于
-        self.about_card = Card(
-            '关于 CampusNet', '本机运行 · 数据不出网', parent=self
+        self.about_card = Card('关于', '本机运行 · 数据不出网', parent=self)
+
+        # 品牌区：图标 + 程序名（可自定义）+ 版本标签 + 一句话简介
+        brand = QHBoxLayout()
+        brand.setContentsMargins(0, 2, 0, 0)
+        brand.setSpacing(16)
+
+        app_icon = IconWidget(QIcon(resource_path('app.ico')), self.about_card)
+        app_icon.setFixedSize(48, 48)
+        brand.addWidget(app_icon, 0, Qt.AlignTop)
+
+        brand_text = QVBoxLayout()
+        brand_text.setContentsMargins(0, 0, 0, 0)
+        brand_text.setSpacing(4)
+
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(10)
+        self.about_name_label = TitleLabel(display_name(''), self.about_card)
+        title_row.addWidget(self.about_name_label, 0, Qt.AlignVCenter)
+        version_chip = CaptionLabel(f'v{_app_version()}', self.about_card)
+        version_chip.setStyleSheet(
+            f'color: {theme.color("accent")};'
+            f'background-color: {theme.color("accent_soft")};'
+            'border-radius: 9px; padding: 2px 8px;'
         )
-        self.about_card.add(
+        title_row.addWidget(version_chip, 0, Qt.AlignVCenter)
+        title_row.addStretch(1)
+        brand_text.addLayout(title_row)
+        brand_text.addWidget(
             body_label(
-                'CampusNet 是一个面向校园网的 Windows 桌面助手：自动连接、认证、'
-                '流量统计与网络诊断都在一个窗口里完成。',
+                '校园网自动连接、认证与流量统计，一个窗口完成。',
+                muted=True,
                 parent=self.about_card,
             )
         )
+        brand.addLayout(brand_text, 1)
+        self.about_card.add_layout(brand)
+        self.about_card.add(divider(self.about_card))
 
+        # 三栏：版本信息 / 链接与许可 / 开源致谢
+        columns = QGridLayout()
+        columns.setContentsMargins(0, 0, 0, 0)
+        columns.setHorizontalSpacing(32)
+        columns.setVerticalSpacing(0)
+
+        info = QWidget(self.about_card)
+        info_box = QVBoxLayout(info)
+        info_box.setContentsMargins(0, 0, 0, 0)
+        info_box.setSpacing(10)
+        info_box.addWidget(_about_section('版本信息', info))
         self.about_grid = KVGrid(
             [
                 ('version', '程序版本'),
@@ -503,45 +572,71 @@ class SettingsPage(QWidget):
                 ('data', '数据目录'),
             ],
             columns=1,
-            parent=self.about_card,
+            parent=info,
         )
-        self.about_card.add(self.about_grid)
+        info_box.addWidget(self.about_grid)
+        info_box.addStretch(1)
+        info.setMinimumWidth(268)
+        info.setMaximumWidth(380)
+        columns.addWidget(info, 0, 0, Qt.AlignTop)
 
-        links = QHBoxLayout()
-        links.setSpacing(8)
-        links.addWidget(body_label('许可证：MIT License', parent=self.about_card))
-        license_button = PushButton(FIF.CERTIFICATE, '查看 LICENSE', self.about_card)
-        license_button.setToolTip('打开项目根目录的 LICENSE 文件')
-        license_button.clicked.connect(self._open_license)
-        links.addWidget(license_button)
-
+        links = QWidget(self.about_card)
+        links_box = QVBoxLayout(links)
+        links_box.setContentsMargins(0, 0, 0, 0)
+        links_box.setSpacing(6)
+        links_box.addWidget(_about_section('链接与许可', links))
         self.github_link = HyperlinkButton(
-            FIF.GITHUB,
-            GITHUB_URL,
-            '打开 GitHub 仓库',
-            parent=self.about_card,
+            FIF.GITHUB, GITHUB_URL, '项目主页', parent=links
         )
         self.github_link.setToolTip(GITHUB_URL)
-        links.addWidget(self.github_link)
-        links.addStretch(1)
-        self.about_card.add_layout(links)
+        self.github_link.setMinimumWidth(150)
+        links_box.addWidget(self.github_link)
+        license_button = PushButton(FIF.CERTIFICATE, 'MIT 许可证', links)
+        license_button.setToolTip('打开项目根目录的 LICENSE 文件')
+        license_button.setMinimumWidth(150)
+        license_button.clicked.connect(self._open_license)
+        links_box.addWidget(license_button)
+        issues_url = f'{GITHUB_URL}/issues'
+        feedback_link = HyperlinkButton(
+            FIF.FEEDBACK, issues_url, '问题反馈', parent=links
+        )
+        feedback_link.setToolTip(issues_url)
+        feedback_link.setMinimumWidth(150)
+        links_box.addWidget(feedback_link)
+        links_box.addStretch(1)
+        columns.addWidget(links, 0, 1, Qt.AlignTop)
 
-        self.about_card.add(StrongBodyLabel('开源致谢', self.about_card))
-        for name, license_name, url in ACKNOWLEDGEMENTS:
-            row = QHBoxLayout()
-            row.setSpacing(8)
-            row.addWidget(
-                body_label(f'{name} — {license_name}', parent=self.about_card), 1
-            )
-            link = HyperlinkButton(url, '项目主页', self.about_card)
+        thanks = QWidget(self.about_card)
+        thanks_box = QVBoxLayout(thanks)
+        thanks_box.setContentsMargins(0, 0, 0, 0)
+        thanks_box.setSpacing(10)
+        thanks_box.addWidget(_about_section('开源致谢', thanks))
+        ack_grid = QGridLayout()
+        ack_grid.setContentsMargins(0, 0, 0, 0)
+        ack_grid.setHorizontalSpacing(12)
+        ack_grid.setVerticalSpacing(6)
+        for row, (name, license_name, url) in enumerate(ACKNOWLEDGEMENTS):
+            name_label = body_label(name, wrap=False, parent=thanks)
+            ack_grid.addWidget(name_label, row, 0)
+            license_label = caption_label(license_name, parent=thanks)
+            license_label.setWordWrap(False)
+            ack_grid.addWidget(license_label, row, 1)
+            link = HyperlinkButton(url, '源码', parent=thanks)
             link.setToolTip(url)
-            row.addWidget(link, 0)
-            self.about_card.add_layout(row)
+            ack_grid.addWidget(link, row, 2)
+        ack_grid.setColumnStretch(0, 1)
+        thanks_box.addLayout(ack_grid)
+        thanks_box.addStretch(1)
+        columns.addWidget(thanks, 0, 2, Qt.AlignTop)
+        columns.setColumnStretch(0, 0)
+        columns.setColumnStretch(1, 0)
+        columns.setColumnStretch(2, 1)
+        self.about_card.add_layout(columns)
 
+        self.about_card.add(divider(self.about_card))
         self.about_card.add(
-            body_label(
+            caption_label(
                 r'数据只保存在本机 %APPDATA%\CampusNet，不会上传到任何服务器。',
-                muted=True,
                 parent=self.about_card,
             )
         )
@@ -666,6 +761,10 @@ class SettingsPage(QWidget):
         on(self.start_min_row.changed, lambda v: self._save({'start_minimized': v}))
         on(self.home_package_row.changed, self._on_home_package)
         on(self.developer_row.changed, self._on_developer_mode)
+        on(
+            self.app_name_row.edit.editingFinished,
+            lambda: self._on_app_name(self.app_name_row.text()),
+        )
 
     def bind_window(self, window) -> None:
         self._window = window
@@ -717,6 +816,7 @@ class SettingsPage(QWidget):
         self.retention_row.set_value(int(config.get('traffic_retention_days') or 120))
 
         self.theme_row.set_value(str(config.get('theme') or 'auto'))
+        self.app_name_row.set_text(str(config.get('app_name') or ''))
         self.mica_row.set_checked(bool(config.get('mica_effect')))
         self.tray_row.set_checked(bool(config.get('close_to_tray')))
         self.notify_row.set_checked(bool(config.get('show_notification')))
@@ -738,6 +838,10 @@ class SettingsPage(QWidget):
             fluent_version = '-'
         from PyQt5.QtCore import PYQT_VERSION_STR, QT_VERSION_STR
 
+        if hasattr(self, 'about_name_label'):
+            self.about_name_label.setText(
+                display_name(str(config.get('app_name') or ''))
+            )
         self.about_grid.update_values(
             {
                 'version': _app_version(),
@@ -877,11 +981,27 @@ class SettingsPage(QWidget):
             return
         self._save({'developer_mode': value})
 
+    def _on_app_name(self, value: str) -> None:
+        """保存自定义程序名；留空则恢复默认名称。"""
+        text = (value or '').strip()[:APP_NAME_MAX]
+        if text == str(self._config.get('app_name') or ''):
+            return
+
+        def done(_config: Any) -> None:
+            # 关于卡片里的大标题即时跟随；窗口标题与托盘提示下次启动生效。
+            self.about_name_label.setText(
+                display_name(str(self._config.get('app_name') or ''))
+            )
+            Toast.success(self, '已保存', '程序名称将在下次启动时生效')
+
+        self._save({'app_name': text}, on_done=done)
+
     def save_and_test(self) -> None:
         if self._saving:
             return
         raw = self.username_row.text().strip()
-        for bad in ('例如', '手机号', '学号', '校园卡', '请输入', '请填写'):
+        # 只拦截真正会污染账号的提示词；「手机号 / 校园卡」是正常描述，不当作脏字符。
+        for bad in ('例如', '请输入', '请填写', '账号：', '账号:'):
             if bad in raw:
                 Toast.warning(
                     self,
@@ -889,7 +1009,7 @@ class SettingsPage(QWidget):
                     f'这里要填号码本身，不要带「{bad}」这类提示文字。',
                 )
                 return
-        username = ''.join(ch for ch in raw if ch.isalnum())
+        username = ''.join(ch for ch in raw if ch.isascii() and ch.isalnum())
         if username != raw:
             self._loading = True
             try:
@@ -897,7 +1017,7 @@ class SettingsPage(QWidget):
             finally:
                 self._loading = False
         if not username or (not username.isdigit() and len(username) < 4):
-            Toast.warning(self, '请先填写账号', '校园网账号是校园卡手机号，只填数字。')
+            Toast.warning(self, '请先填写账号', '校园网账号是校园卡手机号，只填号码本身（数字）。')
             return
         patch = {'username': username}
         password = self.password_row.text()
@@ -1101,4 +1221,4 @@ def _app_version() -> str:
         from main import __version__
         return str(__version__)
     except Exception:
-        return '1.2.0'
+        return '1.3.0'

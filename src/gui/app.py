@@ -35,7 +35,7 @@ from .toasts import Toast
 from ..core.deps import resource_path
 from ..core import notify as notify_identity
 from ..core.service import Service
-from ..core.settings import Settings
+from ..core.settings import Settings, display_name
 from ..core.winutil import is_admin
 
 APP_TITLE = "校园网客户端"
@@ -59,7 +59,8 @@ class MainWindow(FluentWindow):
         self._last_title = ""
         self._last_tray_status = ""
 
-        self.setWindowTitle(f"{APP_TITLE}（未连接）")
+        self.app_title = display_name(self.service.settings.get("app_name"))
+        self.setWindowTitle(f"{self.app_title}（未连接）")
         icon_path = resource_path("app.ico")
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
@@ -299,7 +300,7 @@ class MainWindow(FluentWindow):
         label = state.get("label", "")
         ssid = state.get("ssid", "")
         suffix = f" · {ssid}" if ssid else ""
-        title = f"{APP_TITLE}（{'已连接' if self._campus_online(state) else '未连接'}）"
+        title = f"{self.app_title}（{'已连接' if self._campus_online(state) else '未连接'}）"
         if title != self._last_title:
             self._last_title = title
             self.setWindowTitle(title)
@@ -371,7 +372,7 @@ class MainWindow(FluentWindow):
 
     def _build_tray(self) -> None:
         self.tray = QSystemTrayIcon(self._tray_icon(), self)
-        self.tray.setToolTip(f"{APP_TITLE} — 待检测")
+        self.tray.setToolTip(f"{self.app_title} — 待检测")
 
         menu = QMenu()
         self._tray_status = QAction("状态：待检测", menu)

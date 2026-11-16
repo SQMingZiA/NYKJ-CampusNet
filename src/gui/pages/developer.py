@@ -639,4 +639,4 @@ def _app_version() -> str:
 
         return str(__version__)
     except Exception:
-        return "1.2.0"
+        return "1.3.0"

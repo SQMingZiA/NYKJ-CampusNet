@@ -36,6 +36,62 @@ from ..net.http import post_form
 
 TOKEN_TTL_SECONDS = 60 * 90
 
+# 学校上网明细接口能接受的日期写法（界面上给的就是前两种）。
+_DATE_FORMATS = ("%Y-%m-%d", "%Y/%m/%d", "%Y%m%d")
+
+
+def _day_stamp(date: str) -> int | None:
+    """把 ``2026-10-10`` 这类日期换成当天 0 点的 unix 时间戳（本地时区）。"""
+    text = (date or "").strip()
+    if not text:
+        text = time.strftime("%Y-%m-%d")
+    for fmt in _DATE_FORMATS:
+        try:
+            return int(time.mktime(time.strptime(text, fmt)))
+        except ValueError:
+            continue
+    return None
+
+
+def _stamp_day(stamp: int) -> str:
+    """时间戳 → ``2026-10-10``（回填给界面用）。"""
+    try:
+        return time.strftime("%Y-%m-%d", time.localtime(stamp))
+    except (OSError, ValueError):
+        return ""
+
+
+def _as_int(value: Any) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _net_log_record(item: dict[str, Any], stamp: int) -> dict[str, Any]:
+    """把一条上网明细压成界面好用的字段（学校返回的键名是大小写混排的）。"""
+    start = str(item.get("AcctStartTime") or "")
+    stop = str(item.get("AcctStopTime") or "")
+    if not stop or stop.startswith("0000"):
+        stop = ""
+    session = _as_int(item.get("AcctSessionTime"))
+    return {
+        "date": _stamp_day(stamp),
+        "start": start,
+        "stop": stop,
+        "online": "" if stop else "在线",
+        "duration": session,
+        "up": _as_int(item.get("AcctInputOctets")),
+        "down": _as_int(item.get("AcctOutputOctets")),
+        "up_text": str(item.get("upFlow") or ""),
+        "down_text": str(item.get("downFlow") or ""),
+        "total_text": str(item.get("totalFlow") or ""),
+        "ip": str(item.get("FramedIPAddress") or ""),
+        "mac": str(item.get("CallingStationId") or ""),
+        "terminate": str(item.get("AcctTerminateCause") or ""),
+        "session_id": str(item.get("AcctSessionId") or ""),
+    }
+
 
 class SelfService:
     """自助系统客户端。一个实例持有一次登录的 token。"""
@@ -102,9 +158,16 @@ class SelfService:
         )
         payload = result.json() if result.ok else None
         if not isinstance(payload, dict):
+            # 学校停用的接口（例如 setUserPause / restoreUserPause）会返回
+            # 200 + 空响应体，这里给一句人话，别把 "HTTP 200" 抛到界面上。
+            text = (result.text or "").strip()
+            if result.ok and not text:
+                return {"ok": False,
+                        "message": "学校端未受理（该接口可能已停用）",
+                        "data": None, "raw": ""}
             return {"ok": False,
                     "message": f"HTTP {result.status} {result.error}",
-                    "data": None, "raw": (result.text or "")[:200]}
+                    "data": None, "raw": text[:200]}
 
         code = payload.get("errcode")
         if code == 0:
@@ -142,9 +205,26 @@ class SelfService:
         return self._call("/api/selfnet/billList")
 
     def net_log(self, date: str = "") -> dict[str, Any]:
-        """上网明细；``date`` 形如 ``2026-10-10``，留空取当天。"""
-        payload = {"d": date} if date else {}
-        return self._call("/api/selfnet/netLog", payload)
+        """上网明细；``date`` 形如 ``2026-10-10``，留空取当天。
+
+        学校接口的参数 ``d`` 是**当天 0 点的 unix 时间戳（秒）**，不是日期
+        字符串：传 ``2026-10-10`` 会返回 ``errcode=0`` 但 ``logs`` 恒为空，
+        这正是「上网明细查不出来」的根因。
+        """
+        stamp = _day_stamp(date)
+        if stamp is None:
+            return {"ok": False, "message": f"无法识别的日期：{date}", "data": None}
+        result = self._call("/api/selfnet/netLog", {"d": stamp})
+        if not result.get("ok"):
+            return result
+        data = result.get("data")
+        logs = data.get("logs") if isinstance(data, dict) else None
+        records = [_net_log_record(item, stamp) for item in (logs or []) if isinstance(item, dict)]
+        return {
+            "ok": True,
+            "data": {"date": _stamp_day(stamp), "logs": list(logs or []), "records": records},
+            "raw": result.get("raw"),
+        }
 
     def online_devices(self) -> dict[str, Any]:
         return self._call("/api/selfnet/getOnlineDevices")

@@ -18,6 +18,9 @@ from typing import Any
 APP_NAME = "CampusNet"
 APP_DIR_NAME = "CampusNet"
 
+# 用户自定义程序名的长度上限（它只是窗口/托盘标题，不必过长）。
+APP_NAME_MAX = 24
+
 # 配置结构版本号。字段含义变化 / 需要一次性纠正历史坏值时 +1，
 # 旧配置会在 Settings.load() 里走 _migrate()。
 CONFIG_VERSION = 2
@@ -76,6 +79,8 @@ DEFAULTS: dict[str, Any] = {
 
     "home_show_notice": True,
     "notice_refresh_minutes": 10,
+
+    "app_name": "",
 
     "theme": "auto",
     "mica_effect": True,
@@ -291,6 +296,10 @@ class Settings:
         if self._data.get("theme") not in ("auto", "light", "dark"):
             self._data["theme"] = DEFAULTS["theme"]
 
+        name = self._data.get("app_name")
+        name = name.strip()[:APP_NAME_MAX] if isinstance(name, str) else ""
+        self._data["app_name"] = name
+
         patterns = self._data.get("wifi_allow_list")
         if not isinstance(patterns, list):
             patterns = list(DEFAULTS["wifi_allow_list"])
@@ -357,3 +366,9 @@ class Settings:
 
 def settings_field_names() -> list[str]:
     return [f.name for f in fields(Settings) if not f.name.startswith("_")]
+
+
+def display_name(name: str = "") -> str:
+    """把「程序名称」配置规整成可以直接显示的标题（留空就用默认名）。"""
+    text = (name or "").strip()
+    return text[:APP_NAME_MAX] if text else APP_NAME
