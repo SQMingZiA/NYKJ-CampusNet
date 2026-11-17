@@ -20,7 +20,6 @@ from ..core.settings import Settings
 from ..core.sysinfo import gateway_info, is_elevated, os_info, public_ip, system_summary
 from ..core.traffic import TrafficMonitor
 from ..core.deps import PROJECT_ROOT, resource_path
-from ..core.history import DiagnosticHistory
 from ..net import diagnostics, wifi
 from ..portal import selfbase
 from ..portal.auth import AuthEngine
@@ -141,9 +140,6 @@ class Service(QObject):
         )
         # 默认只统计校园网内的流量（traffic_only_campus）。
         self.traffic.record_gate = self._traffic_record_allowed
-
-        # 每次网络诊断的指标，落在 data_dir/diagnostics.json 里，供趋势图使用。
-        self.diag_history = DiagnosticHistory(self.settings.data_dir)
 
         self._state = {
             "state": STATE_IDLE,
@@ -889,24 +885,6 @@ class Service(QObject):
     def traffic_daily(self, days: int = 84) -> list[dict[str, Any]]:
         """最近 ``days`` 天的每日用量（热力图数据源）。"""
         return self.traffic.daily_totals(days)
-
-    def record_diagnostic(self, metrics: dict[str, Any]) -> dict[str, Any]:
-        """记录一次网络诊断的指标。
-
-        ``metrics`` 里可以带 ``latency_ms``、``jitter_ms``、``dns_ms``、
-        ``down_bps``、``up_bps``、``ok``、``note``；缺的项记为 None。
-        """
-        entry = dict(metrics or {})
-        entry.setdefault("at", time.time())
-        return self.diag_history.add(entry)
-
-    def diagnostic_trend(self, limit: int = 120) -> list[dict[str, Any]]:
-        """最近的诊断记录（时间升序），趋势图数据源。"""
-        return self.diag_history.recent(limit)
-
-    def clear_diagnostic_history(self) -> None:
-        """清空诊断历史。"""
-        self.diag_history.clear()
 
     def export_traffic_csv(self, path: str) -> dict[str, Any]:
         try:

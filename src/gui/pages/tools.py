@@ -46,7 +46,7 @@ from qfluentwidgets import (
 
 from .. import theme
 from ..async_task import run_async
-from ..charts import HeatmapChart, HistoryChart, TrendChart
+from ..charts import HeatmapChart, HistoryChart
 from ..formatting import (
     format_bytes,
     format_datetime,
@@ -443,28 +443,6 @@ class WifiView(QWidget):
 DIAG_TIMEOUT_SEC = 180.0
 
 
-def _to_float(value: Any) -> float | None:
-    """尽量转成浮点数，转不了就是 None。"""
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _mbps_to_bps(value: Any) -> int | None:
-    """Mbps → 字节/秒。"""
-    rate = _to_float(value)
-    return int(rate * 125000) if rate is not None else None
-
-
-def _bps_to_mbps_text(value: Any) -> str:
-    """字节/秒 → 「12.3 Mbps」这样的文本。"""
-    rate = _to_float(value)
-    if not rate:
-        return "—"
-    return f"{rate / 125000:.1f} Mbps"
-
-
 class DiagView(QWidget):
     """网络诊断：一次点击依次跑完连通性、延迟、DNS、下载、上传。"""
 
@@ -476,8 +454,6 @@ class DiagView(QWidget):
         self._started = 0.0
         self._rows: list[list[str]] = []
         self._tips: list[str] = []
-        self._metrics: dict[str, Any] = {}
-        self._failed_steps = False
         self._steps = (
             ("connectivity", self._probe_connectivity),
             ("latency", lambda: diagnostics.latency_test(count=5)),
@@ -540,22 +516,6 @@ class DiagView(QWidget):
         card.add(self.result_table)
         _insert(layout, card)
 
-        trend_card = Card("诊断历史趋势", parent=self)
-        trend_card.add(BodyLabel("每次测试都会记一条，最多保留 300 次；红色 × 表示当次测试有失败项。", self))
-        self.trend_chart = TrendChart(self)
-        trend_card.add(self.trend_chart)
-        footer = QHBoxLayout()
-        footer.setContentsMargins(0, 0, 0, 0)
-        footer.setSpacing(8)
-        self.trend_summary = BodyLabel("还没有诊断记录", self)
-        footer.addWidget(self.trend_summary, 1)
-        self.trend_clear_button = PushButton(FIF.DELETE, "清空历史", self)
-        self.trend_clear_button.clicked.connect(self.clear_trend)
-        footer.addWidget(self.trend_clear_button)
-        trend_card.add_layout(footer)
-        _insert(layout, trend_card)
-        QTimer.singleShot(0, self.refresh_trend)
-
         self._timer = QTimer(self)
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self._check_timeout)
@@ -593,8 +553,6 @@ class DiagView(QWidget):
         self._started = time.time()
         self._rows = []
         self._tips = []
-        self._metrics = {"ok": True}
-        self._failed_steps = False
         for tile in (self.tile_latency, self.tile_jitter, self.tile_down, self.tile_up, self.tile_dns):
             tile.set_value("—", "未测试")
             tile.setToolTip("")
@@ -651,7 +609,6 @@ class DiagView(QWidget):
 
     def _mark_failed(self, index: int, message: str) -> None:
         """把某一步的失败原因写进 tile 的 subtitle 和 tooltip。"""
-        self._failed_steps = True
         name = self._steps[index][0]
         if name == "connectivity":
             self.kv.update_values({
@@ -737,8 +694,6 @@ class DiagView(QWidget):
             )
         best = result.get("best") or {}
         if best:
-            self._metrics["latency_ms"] = _to_float(best.get("avg_ms"))
-            self._metrics["jitter_ms"] = _to_float(best.get("jitter_ms"))
             self.tile_latency.set_value(f"{best.get('avg_ms')} ms", f"最快 · {best.get('name')}")
             self.tile_jitter.set_value(f"{best.get('jitter_ms')} ms", f"抖动 · {best.get('name')}")
             self.tile_latency.setToolTip(f"{best.get('name')}（{best.get('host')}）平均 {best.get('avg_ms')} ms")
@@ -764,7 +719,6 @@ class DiagView(QWidget):
         usable = [entry for entry in entries if entry.get("ok")]
         if usable:
             best = min(usable, key=lambda entry: entry.get("ms") or 0)
-            self._metrics["dns_ms"] = _to_float(best.get("ms"))
             self.tile_dns.set_value(f"{best.get('ms')} ms", f"最快 · {best.get('name')}")
             self.tile_dns.setToolTip(f"{best.get('name')} 解析耗时 {best.get('ms')} ms")
         else:
@@ -774,7 +728,6 @@ class DiagView(QWidget):
     def _apply_download(self, result: Any) -> None:
         result = result or {}
         if result.get("ok"):
-            self._metrics["down_bps"] = _mbps_to_bps(result.get("mbps"))
             label = str(result.get("label") or "")
             self.tile_down.set_value(
                 f"{result.get('mbps')} Mbps",
@@ -805,7 +758,6 @@ class DiagView(QWidget):
     def _apply_upload(self, result: Any) -> None:
         result = result or {}
         if result.get("ok"):
-            self._metrics["up_bps"] = _mbps_to_bps(result.get("mbps"))
             label = str(result.get("label") or "")
             self.tile_up.set_value(
                 f"{result.get('mbps')} Mbps",
@@ -837,54 +789,11 @@ class DiagView(QWidget):
     def _finish(self) -> None:
         self._running = False
         self._timer.stop()
-        self._record_diagnostic()
         self.speed_button.setEnabled(True)
         self.speed_button.setText("开始测试")
         self.progress.setValue(len(self._steps))
         self.progress.setVisible(False)
         Toast.success(self, "测试完成", "五项结果已写入上方表格，失败项可在备注中查看原因。")
-
-    def _record_diagnostic(self) -> None:
-        """把这一轮的指标写进历史，并刷新趋势图。"""
-        metrics = dict(self._metrics or {})
-        metrics["ok"] = bool(metrics.get("ok", True)) and not self._failed_steps
-        if metrics["ok"] and not any(
-            metrics.get(key) is not None for key in ("latency_ms", "dns_ms", "down_bps", "up_bps")
-        ):
-            return
-        metrics["note"] = "一键网络诊断"
-        run_async(self.service.record_diagnostic, metrics, on_done=lambda _r: self.refresh_trend())
-
-    def refresh_trend(self) -> None:
-        run_async(
-            self.service.diagnostic_trend,
-            120,
-            on_done=self._apply_trend,
-            on_error=lambda _m: None,
-        )
-
-    def _apply_trend(self, records: Any) -> None:
-        records = list(records or [])
-        self.trend_chart.set_records(records)
-        if not records:
-            self.trend_summary.setText("还没有诊断记录")
-            return
-        last = records[-1]
-        stamp = time.strftime('%m-%d %H:%M', time.localtime(float(last.get('at') or 0)))
-        self.trend_summary.setText(f"最近一次：{stamp} · 延迟 {last.get('latency_ms') or '—'} ms · "
-                                   f"下载 {_bps_to_mbps_text(last.get('down_bps'))}")
-
-    def clear_trend(self) -> None:
-        if not confirm_typed(
-            self,
-            "清空诊断历史",
-            "会删除本机保存的全部诊断记录，无法恢复。",
-            "清空",
-            detail="这些记录只在本机，用来画趋势图。",
-        ):
-            return
-        run_async(self.service.clear_diagnostic_history,
-                  on_done=lambda _r: (Toast.success(self, "已清空", "诊断历史已删除。"), self.refresh_trend()))
 
     def _check_timeout(self) -> None:
         if not self._running:
