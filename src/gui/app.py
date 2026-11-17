@@ -516,9 +516,28 @@ def run_app() -> int:
     app.setQuitOnLastWindowClosed(False)
 
     from ..core import single_instance
+    from ..core.settings import default_data_dir
 
+    data_dir = default_data_dir()
+
+    # 已有实例：只把它叫出来，自己不再建界面。
     if single_instance.notify_existing():
         return 0
+    if single_instance.is_running():
+        # 命名管道被提权级别挡住时，用标记文件让已有实例自己弹窗。
+        single_instance.request_show(data_dir)
+        return 0
+
+    # 监听要尽早建立：晚于窗口构造的话，用户在这期间再点一次图标
+    # 就会因为「连不上服务器」而启动第二个进程，反过来把对方的监听顶掉。
+    holder: dict[str, object] = {}
+
+    def _show_window() -> None:
+        window = holder.get("window")
+        if window is not None:
+            window.show_window()
+
+    server = single_instance.create_server(_show_window, data_dir)
 
     settings = Settings().load()
     theme.apply_theme(settings.theme or "auto", app)
@@ -526,8 +545,8 @@ def run_app() -> int:
     service = Service(settings)
     service.log("info", identity.get("message") or "通知身份已初始化")
     window = MainWindow(service)
-
-    single_instance.create_server(window.show_window)
+    holder["window"] = window
+    app._single_instance_server = server  # 跟着应用活，避免被 GC
 
     if not is_admin() and "--elevated-retry" not in sys.argv:
         service.log("warn", "当前未提权：若连接 WiFi 失败，会在那一刻请求一次 UAC")

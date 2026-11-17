@@ -956,12 +956,13 @@ class TrafficView(QWidget):
         _insert(layout, chart_card)
 
         heat_card = Card("用量热力图", parent=self)
-        heat_card.add(BodyLabel("最近 12 周，每天一格；点一下看当天用量。", self))
+        heat_card.add(BodyLabel("按月查看每天的用量，点某天看当天数字。", self))
         self.heatmap = HeatmapChart(parent=self)
         heat_card.add(self.heatmap)
         self.heatmap_summary = BodyLabel("", parent=self)
         heat_card.add(self.heatmap_summary)
         self.heatmap.dayClicked.connect(self._on_heatmap_day)
+        self.heatmap.monthChanged.connect(self._on_heatmap_month_changed)
         _insert(layout, heat_card)
 
         detail = Card("最近明细", parent=self)
@@ -1066,11 +1067,24 @@ class TrafficView(QWidget):
         )
 
     def _apply_heatmap(self, rows: Any) -> None:
-        """热力图数据到位：刷新格子并把汇总设为最近 12 周总量。"""
+        """热力图数据到位：刷新月历，并把汇总设为当前显示月份的总量。"""
         items = [item for item in (rows or []) if isinstance(item, dict)]
         self.heatmap.set_days(items)
-        total = sum(int(item.get("total") or 0) for item in items)
-        self.heatmap_summary.setText(f"最近 12 周共 {format_bytes(total)}")
+        self._update_heatmap_summary()
+
+    def _update_heatmap_summary(self) -> None:
+        """说明行显示「当前月份 · 当月合计」，没有记录时明确说明。"""
+        year, month = self.heatmap.current_month
+        total = self.heatmap.month_total()
+        if total <= 0:
+            text = f"{year} 年 {month} 月 · 没有记录"
+        else:
+            text = f"{year} 年 {month} 月 · 共 {format_bytes(total)}"
+        self.heatmap_summary.setText(text)
+
+    def _on_heatmap_month_changed(self, _year: int, _month: int) -> None:
+        """切换月份后同步说明行。"""
+        self._update_heatmap_summary()
 
     def _on_heatmap_day(self, date: str) -> None:
         """点选某一天：在说明行显示当天用量，不跳转页面。"""

@@ -1,7 +1,9 @@
-"""设置页：账户 / 自动连接 / Portal 认证 / 流量统计 / 界面 / 维护。
+"""设置页：左侧一级导航 + 右侧分组滚动页。
 
-全部用 **FluentUI** 的 ``SettingCard`` 体系（图标 + 标题 + 说明 … 右侧控件），
-与 Windows 11 设置应用的排版一致。改动即时生效并落盘。
+一级导航按使用场景分成「通用 / 连接 / 流量与用量 / 通知与启动 / 关于」，
+右侧用 ``QStackedWidget`` 承载对应分组的滚动页；每页再用 ``Card`` 按主题
+分组，Card 内统一使用 ``SettingCard`` 行。所有控件只构建一次，切换分组
+不会重建控件，因此未保存的输入会原样保留，也不会触发保存。
 """
 
 from __future__ import annotations
@@ -10,14 +12,18 @@ import platform
 from pathlib import Path
 from typing import Any
 
-from PyQt5.QtCore import Qt, QTimer, QUrl
+from PyQt5.QtCore import QSize, Qt, QTimer, QUrl
 from PyQt5.QtGui import QDesktopServices, QIcon
 from PyQt5.QtWidgets import (
     QAbstractItemView,
+    QButtonGroup,
     QFileDialog,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
+    QPushButton,
+    QStackedWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
@@ -29,7 +35,6 @@ from qfluentwidgets import (
     IconWidget,
     LineEdit,
     PushButton,
-    SettingCardGroup,
     TableWidget,
     TitleLabel,
 )
@@ -97,6 +102,15 @@ THEMES = [
 
 DEFAULT_SSIDS = ['NYKJ', 'CMCC-NYKJ', 'CMCCNYKJ', 'NYKY']
 
+# 左侧一级导航：(标题, 图标)。索引与 QStackedWidget 的页序一一对应。
+NAV_GROUPS = [
+    ('通用', FIF.SETTING),
+    ('连接', FIF.WIFI),
+    ('流量与用量', FIF.SPEED_HIGH),
+    ('通知与启动', FIF.MESSAGE),
+    ('关于', FIF.INFO),
+]
+
 
 def _about_section(text: str, parent: QWidget | None = None) -> CaptionLabel:
     """「关于」卡片里的小栏目标题（弱化色 + 半粗）。"""
@@ -106,8 +120,21 @@ def _about_section(text: str, parent: QWidget | None = None) -> CaptionLabel:
     return label
 
 
+class _NavButton(QPushButton):
+    """左侧一级导航按钮：选中时由样式表画出强调色指示条。"""
+
+    def __init__(self, text: str, icon, parent: QWidget | None = None) -> None:
+        super().__init__(text, parent)
+        self.setObjectName('SettingsNavButton')
+        self.setCheckable(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedHeight(40)
+        self.setIcon(icon.icon())
+        self.setIconSize(QSize(18, 18))
+
+
 class SettingsPage(QWidget):
-    """设置页。"""
+    """设置页（一级导航 + 二级分组页）。"""
 
     def __init__(self, service, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -115,9 +142,18 @@ class SettingsPage(QWidget):
         self.service = service
         self._window = None
         self._config = {}
-        self._groups = []
-        # 不参与分组高度修正的独立卡片（SSID 名单、关于）
-        self._loose = []
+        # (Card, 该 Card 内的设置行)；供 filter_rows 使用。
+        self._groups: list[tuple[QWidget, list[QWidget]]] = []
+        # 一级导航 / 分组页 / 每页滚动区与内容布局。
+        self.nav_bar: QFrame | None = None
+        self.stack: QStackedWidget | None = None
+        self._nav_buttons: list[_NavButton] = []
+        self._nav_group: QButtonGroup | None = None
+        self._pages: list[QWidget] = []
+        self._scrolls: list[Any] = []
+        self._page_layouts: list[QVBoxLayout] = []
+        # 不参与分组高度修正的独立卡片（兼容旧代码）。
+        self._loose: list[QWidget] = []
         # 回填配置期间抑制控件信号
         self._loading = True
         # 账户「保存并测试」流程进行中：按钮禁用并显示进度文案
@@ -126,15 +162,102 @@ class SettingsPage(QWidget):
         self._build_ui()
         self.reload()
 
+    # ------------------------------------------------------------------
+    # 界面骨架
+    # ------------------------------------------------------------------
     def _build_ui(self) -> None:
-        outer = QVBoxLayout(self)
+        outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        scroll, layout = scroll_page(self, margins=(28, 20, 28, 28), spacing=18)
-        outer.addWidget(scroll)
-        self._body_layout = layout
+        outer.setSpacing(0)
 
-        # 认证账户
-        account = SettingCardGroup('认证账户', self)
+        self.nav_bar = QFrame(self)
+        self.nav_bar.setObjectName('SettingsNavBar')
+        self.nav_bar.setFixedWidth(190)
+        nav_layout = QVBoxLayout(self.nav_bar)
+        nav_layout.setContentsMargins(12, 20, 12, 16)
+        nav_layout.setSpacing(4)
+
+        nav_title = CaptionLabel('设置', self.nav_bar)
+        nav_title.setTextColor(theme.color('text_muted'), theme.color('text_muted'))
+        nav_title.setStyleSheet('font-size: 12px; font-weight: 600; padding-left: 8px;')
+        nav_layout.addWidget(nav_title)
+        nav_layout.addSpacing(8)
+
+        self._nav_group = QButtonGroup(self)
+        self._nav_group.setExclusive(True)
+        for index, (title, icon) in enumerate(NAV_GROUPS):
+            button = _NavButton(title, icon, self.nav_bar)
+            button.clicked.connect(
+                lambda _checked=False, i=index: self.switch_group(i)
+            )
+            self._nav_group.addButton(button, index)
+            nav_layout.addWidget(button)
+            self._nav_buttons.append(button)
+
+        nav_layout.addStretch(1)
+        version_label = CaptionLabel(f'CampusNet v{_app_version()}', self.nav_bar)
+        version_label.setTextColor(theme.color('text_muted'), theme.color('text_muted'))
+        version_label.setStyleSheet('padding-left: 8px;')
+        nav_layout.addWidget(version_label)
+
+        outer.addWidget(self.nav_bar)
+
+        self.stack = QStackedWidget(self)
+        outer.addWidget(self.stack, 1)
+
+        self._build_general_page()
+        self._build_connection_page()
+        self._build_traffic_page()
+        self._build_notification_page()
+        self._build_about_page()
+
+        self.stack.currentChanged.connect(self._on_group_changed)
+        self._apply_nav_style()
+        # 控件信号统一在最后连接，避免构建期触发保存
+        self._wire()
+        self.switch_group(0)
+
+    def _create_page(self, title: str, subtitle: str) -> tuple[QWidget, QVBoxLayout]:
+        """创建右侧一个分组滚动页，返回 (页面, 内容布局)。"""
+        page = QWidget(self.stack)
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        page_layout.setSpacing(0)
+
+        scroll, layout = scroll_page(page, margins=(28, 16, 28, 16), spacing=14)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        page_layout.addWidget(scroll)
+
+        header = QVBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(2)
+        header.addWidget(TitleLabel(title, page))
+        description = CaptionLabel(subtitle, page)
+        description.setTextColor(theme.color('text_muted'), theme.color('text_muted'))
+        header.addWidget(description)
+        layout.addLayout(header)
+        layout.addSpacing(2)
+
+        self.stack.addWidget(page)
+        self._pages.append(page)
+        self._scrolls.append(scroll)
+        self._page_layouts.append(layout)
+        return page, layout
+
+    def _new_card(self, layout: QVBoxLayout, title: str, subtitle: str = '') -> Card:
+        """在分组页里追加一张主题 Card。"""
+        card = Card(title, subtitle, parent=self.stack)
+        layout.addWidget(card)
+        return card
+
+    # ------------------------------------------------------------------
+    # 「通用」分组
+    # ------------------------------------------------------------------
+    def _build_general_page(self) -> None:
+        _page, layout = self._create_page('通用', '账户、外观与主页等日常设置')
+
+        account = self._new_card(layout, '认证账户', '账号密码仅加密保存在本机')
         self.username_row = TextRow(
             FIF.PEOPLE,
             '校园网账号',
@@ -156,16 +279,87 @@ class SettingsPage(QWidget):
             parent=account,
         )
         self.save_account_row.clicked.connect(self.save_and_test)
-        for card in (self.username_row, self.password_row, self.save_account_row):
-            account.addSettingCard(card)
-        layout.addWidget(account)
+        # 对外沿用保存 / 测试按钮的旧名字（当前由同一个按钮完成两步）。
+        self.save_button = self.save_account_row.button
+        self.test_button = self.save_account_row.button
+        for row in (self.username_row, self.password_row, self.save_account_row):
+            account.add(row)
         self._register(
             account,
             [self.username_row, self.password_row, self.save_account_row],
         )
 
-        # 自动连接与认证
-        auto = SettingCardGroup('自动连接与认证', self)
+        appearance = self._new_card(layout, '外观', '程序名称、主题与窗口材质')
+        self.app_name_row = TextRow(
+            FIF.RENAME,
+            '程序名称',
+            '自定义窗口与托盘里显示的名字，留空则用默认名称',
+            placeholder='留空则使用 CampusNet',
+            parent=appearance,
+        )
+        self.theme_row = ComboRow(
+            FIF.PALETTE,
+            '主题',
+            'FluentUI 浅色 / 深色 / 跟随系统',
+            THEMES,
+            parent=appearance,
+        )
+        self.mica_row = SwitchRow(
+            FIF.VIEW,
+            '云母材质',
+            'Windows 11 上的半透明背景效果（Win10 无效）',
+            parent=appearance,
+        )
+        for row in (self.app_name_row, self.theme_row, self.mica_row):
+            appearance.add(row)
+        self._register(appearance, [self.app_name_row, self.theme_row, self.mica_row])
+
+        home = self._new_card(layout, '主页内容', '首页卡片的显示开关')
+        self.home_notice_row = SwitchRow(
+            FIF.MESSAGE,
+            '主页显示校园网公告',
+            '关闭公告卡后，这里重新打开会清掉关闭记录并再读一次',
+            parent=home,
+        )
+        self.home_package_row = SwitchRow(
+            FIF.CHAT,
+            '主页显示学校套餐',
+            '在主页展示套餐名称、到期时间与流量（来自学校自助系统）',
+            parent=home,
+        )
+        for row in (self.home_notice_row, self.home_package_row):
+            home.add(row)
+        self._register(home, [self.home_notice_row, self.home_package_row])
+
+        maintenance = self._new_card(layout, '维护', '数据目录与恢复出厂设置')
+        open_dir = ButtonRow(
+            FIF.FOLDER,
+            '数据目录',
+            '配置、流量历史与内置浏览器数据都放在这里',
+            '打开目录',
+            parent=maintenance,
+        )
+        open_dir.clicked.connect(lambda: self.service.open_data_dir())
+        reset_all = ButtonRow(
+            FIF.DELETE,
+            '重置全部设置',
+            '恢复出厂配置（账号密码也会清除）',
+            '重置设置',
+            parent=maintenance,
+        )
+        reset_all.clicked.connect(self.reset_all)
+        maintenance.add(open_dir)
+        maintenance.add(reset_all)
+        self._register(maintenance, [open_dir, reset_all])
+        layout.addStretch(1)
+
+    # ------------------------------------------------------------------
+    # 「连接」分组
+    # ------------------------------------------------------------------
+    def _build_connection_page(self) -> None:
+        _page, layout = self._create_page('连接', '自动连接、网络名单与 Portal 认证')
+
+        auto = self._new_card(layout, '自动连接与认证', '进入校园网后的自动化行为')
         self.auto_connect_row = SwitchRow(
             FIF.WIFI, '自动连接校园网', '检测到校园网 SSID 时自动连接', parent=auto
         )
@@ -174,12 +368,6 @@ class SettingsPage(QWidget):
         )
         self.auto_retry_row = SwitchRow(
             FIF.SYNC, '断线自动重试', '网络掉线后按下面的次数与间隔重试', parent=auto
-        )
-        self.notify_drop_row = SwitchRow(
-            FIF.INFO,
-            '掉线时发通知',
-            '被其它设备挤下线、学校侧断会话或手动退出时，弹 Windows 通知（应用名「校园网」）',
-            parent=auto,
         )
         self.auto_reconnect_row = SwitchRow(
             FIF.CONNECT,
@@ -193,20 +381,29 @@ class SettingsPage(QWidget):
             '账号在线数已满（-1022）时自动下线最早在线的设备',
             parent=auto,
         )
-        for card in (
+        for row in (
             self.auto_connect_row,
             self.auto_login_row,
             self.auto_retry_row,
-            self.notify_drop_row,
             self.auto_reconnect_row,
             self.kick_row,
         ):
-            auto.addSettingCard(card)
+            auto.add(row)
+        self._register(
+            auto,
+            [
+                self.auto_connect_row,
+                self.auto_login_row,
+                self.auto_retry_row,
+                self.auto_reconnect_row,
+                self.kick_row,
+            ],
+        )
 
         self.ssid_card = Card(
             '自动连接的网络名单',
             '支持写法互通：CMCC-NYKJ 与 CMCCNYKJ 视为同一个网络',
-            parent=auto,
+            parent=self.stack,
         )
         rule = QHBoxLayout()
         rule.setSpacing(8)
@@ -244,27 +441,10 @@ class SettingsPage(QWidget):
         self.ssid_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.ssid_table.setMinimumHeight(150)
         self.ssid_card.add(self.ssid_table)
-        auto.addSettingCard(self.ssid_card)
-
-        layout.addWidget(auto)
-        self._register(
-            auto,
-            [
-                self.auto_connect_row,
-                self.auto_login_row,
-                self.auto_retry_row,
-                self.notify_drop_row,
-                self.auto_reconnect_row,
-                self.kick_row,
-            ],
-        )
-
-        # SSID 卡片自带表格，不参与分组高度修正
         layout.addWidget(self.ssid_card)
-        self._loose.append(self.ssid_card)
+        self._register(self.ssid_card, [])
 
-        # Portal 认证
-        portal = SettingCardGroup('Portal 认证', self)
+        portal = self._new_card(layout, 'Portal 认证', '认证驱动与门户地址')
         self.driver_row = ComboRow(
             FIF.GLOBE, '认证驱动', '一般保持「自动识别」即可', DRIVERS, parent=portal
         )
@@ -282,13 +462,38 @@ class SettingsPage(QWidget):
             placeholder='http://10.100.2.2:9090/',
             parent=portal,
         )
+        self.probe_url_row = TextRow(
+            FIF.SEARCH,
+            '自定义探测地址',
+            '留空则使用内置的联网探测地址；%T 会被替换成时间戳',
+            placeholder='留空 = 自动探测',
+            parent=portal,
+        )
+        for row in (
+            self.driver_row,
+            self.acip_row,
+            self.portal_url_row,
+            self.probe_url_row,
+        ):
+            portal.add(row)
+        self._register(
+            portal,
+            [
+                self.driver_row,
+                self.acip_row,
+                self.portal_url_row,
+                self.probe_url_row,
+            ],
+        )
+
+        timing = self._new_card(layout, '重试与超时', '通常保持默认即可')
         self.retry_count_row = SpinRow(
             FIF.SYNC,
             '重试次数',
             '自动重试的最大次数',
             minimum=0,
             maximum=20,
-            parent=portal,
+            parent=timing,
         )
         self.retry_delay_row = SpinRow(
             FIF.HISTORY,
@@ -297,30 +502,62 @@ class SettingsPage(QWidget):
             minimum=1,
             maximum=300,
             suffix='秒',
-            parent=portal,
+            parent=timing,
         )
-        for card in (
-            self.driver_row,
-            self.acip_row,
-            self.portal_url_row,
+        self.auth_timeout_row = SpinRow(
+            FIF.CERTIFICATE,
+            '认证超时',
+            '单次认证请求的等待上限',
+            minimum=3000,
+            maximum=60000,
+            suffix='毫秒',
+            parent=timing,
+        )
+        self.wifi_wait_row = SpinRow(
+            FIF.WIFI,
+            '连接等待',
+            '点击连接后等待 Wi-Fi 关联的时间',
+            minimum=500,
+            maximum=30000,
+            suffix='毫秒',
+            parent=timing,
+        )
+        self.reconnect_delay_row = SpinRow(
+            FIF.CONNECT,
+            '重连延迟',
+            '掉线自动重连前的等待时间',
+            minimum=200,
+            maximum=60000,
+            suffix='毫秒',
+            parent=timing,
+        )
+        for row in (
             self.retry_count_row,
             self.retry_delay_row,
+            self.auth_timeout_row,
+            self.wifi_wait_row,
+            self.reconnect_delay_row,
         ):
-            portal.addSettingCard(card)
-        layout.addWidget(portal)
+            timing.add(row)
         self._register(
-            portal,
+            timing,
             [
-                self.driver_row,
-                self.acip_row,
-                self.portal_url_row,
                 self.retry_count_row,
                 self.retry_delay_row,
+                self.auth_timeout_row,
+                self.wifi_wait_row,
+                self.reconnect_delay_row,
             ],
         )
+        layout.addStretch(1)
 
-        # 流量统计
-        traffic = SettingCardGroup('流量统计', self)
+    # ------------------------------------------------------------------
+    # 「流量与用量」分组
+    # ------------------------------------------------------------------
+    def _build_traffic_page(self) -> None:
+        _page, layout = self._create_page('流量与用量', '采样、套餐额度与数据管理')
+
+        traffic = self._new_card(layout, '流量统计', '采样频率与历史保留')
         self.interval_row = SpinRow(
             FIF.SPEED_HIGH,
             '采样间隔',
@@ -336,21 +573,6 @@ class SettingsPage(QWidget):
             '连的是手机热点、家里宽带时不写入历史与用量；关掉后任何网络环境都记账',
             parent=traffic,
         )
-        self.quota_auto_row = SwitchRow(
-            FIF.SYNC,
-            '自动读取套餐额度',
-            '从学校自助系统读取本月总额度；「不限量」套餐会自动置 0',
-            parent=traffic,
-        )
-        self.quota_row = DoubleSpinRow(
-            FIF.CHAT,
-            '每月套餐流量',
-            '填写后主页会显示套餐进度；0 表示不统计配额',
-            minimum=0,
-            maximum=100000,
-            suffix='GB',
-            parent=traffic,
-        )
         self.retention_row = SpinRow(
             FIF.CALENDAR,
             '历史保留天数',
@@ -360,21 +582,52 @@ class SettingsPage(QWidget):
             suffix='天',
             parent=traffic,
         )
-        for card in (
-            self.interval_row,
-            self.traffic_only_row,
-            self.quota_auto_row,
-            self.quota_row,
-            self.retention_row,
-        ):
-            traffic.addSettingCard(card)
+        for row in (self.interval_row, self.traffic_only_row, self.retention_row):
+            traffic.add(row)
+        self._register(
+            traffic,
+            [self.interval_row, self.traffic_only_row, self.retention_row],
+        )
 
+        quota = self._new_card(layout, '套餐额度', '主页套餐进度与月度重置')
+        self.quota_auto_row = SwitchRow(
+            FIF.SYNC,
+            '自动读取套餐额度',
+            '从学校自助系统读取本月总额度；「不限量」套餐会自动置 0',
+            parent=quota,
+        )
+        self.quota_row = DoubleSpinRow(
+            FIF.CHAT,
+            '每月套餐流量',
+            '填写后主页会显示套餐进度；0 表示不统计配额',
+            minimum=0,
+            maximum=100000,
+            suffix='GB',
+            parent=quota,
+        )
+        self.monthly_start_row = SpinRow(
+            FIF.CALENDAR,
+            '月度起始日',
+            '每月从这一天开始重新累计套餐用量',
+            minimum=1,
+            maximum=28,
+            suffix='日',
+            parent=quota,
+        )
+        for row in (self.quota_auto_row, self.quota_row, self.monthly_start_row):
+            quota.add(row)
+        self._register(
+            quota,
+            [self.quota_auto_row, self.quota_row, self.monthly_start_row],
+        )
+
+        data = self._new_card(layout, '数据管理', '导出或清空本机流量历史')
         export_row = ButtonRow(
             FIF.SAVE,
             '导出流量数据',
             '把按小时的用量导出成 CSV',
             '导出 CSV',
-            parent=traffic,
+            parent=data,
         )
         export_row.clicked.connect(self.export_csv)
         reset_row = ButtonRow(
@@ -382,144 +635,110 @@ class SettingsPage(QWidget):
             '重置流量统计',
             '清空全部历史用量记录',
             '重置',
-            parent=traffic,
+            parent=data,
         )
         reset_row.clicked.connect(self.reset_traffic)
-        traffic.addSettingCard(export_row)
-        traffic.addSettingCard(reset_row)
-        layout.addWidget(traffic)
-        self._register(
-            traffic,
-            [
-                self.interval_row,
-                self.traffic_only_row,
-                self.quota_auto_row,
-                self.quota_row,
-                self.retention_row,
-                export_row, reset_row,
-            ],
-        )
+        data.add(export_row)
+        data.add(reset_row)
+        self._register(data, [export_row, reset_row])
+        layout.addStretch(1)
 
-        # 界面与启动
-        appearance = SettingCardGroup('界面与启动', self)
-        self.app_name_row = TextRow(
-            FIF.RENAME,
-            '程序名称',
-            '自定义窗口与托盘里显示的名字，留空则用默认名称',
-            placeholder='留空则使用 CampusNet',
-            parent=appearance,
-        )
-        self.theme_row = ComboRow(
-            FIF.PALETTE,
-            '主题',
-            'FluentUI 浅色 / 深色 / 跟随系统',
-            THEMES,
-            parent=appearance,
-        )
-        self.mica_row = SwitchRow(
-            FIF.VIEW,
-            '云母材质',
-            'Windows 11 上的半透明背景效果（Win10 无效）',
-            parent=appearance,
-        )
-        self.tray_row = SwitchRow(
-            FIF.CLOSE,
-            '关闭时最小化到托盘',
-            '关闭窗口不退出程序，继续后台守护',
-            parent=appearance,
-        )
+    # ------------------------------------------------------------------
+    # 「通知与启动」分组
+    # ------------------------------------------------------------------
+    def _build_notification_page(self) -> None:
+        _page, layout = self._create_page('通知与启动', '系统通知、开机启动与开发者选项')
+
+        notify = self._new_card(layout, '通知', '认证结果、掉线与账号冲突提示')
         self.notify_row = SwitchRow(
             FIF.INFO,
             '系统通知',
             '总开关：认证结果、掉线、账号冲突等提示都由它控制',
-            parent=appearance,
+            parent=notify,
         )
+        self.notify_drop_row = SwitchRow(
+            FIF.INFO,
+            '掉线时发通知',
+            '被其它设备挤下线、学校侧断会话或手动退出时，弹 Windows 通知',
+            parent=notify,
+        )
+        self.notify_app_name_row = TextRow(
+            FIF.RENAME,
+            '通知中的应用名',
+            'Windows 通知标题里显示的程序名，留空则使用「校园网」',
+            placeholder='留空则使用 校园网',
+            parent=notify,
+        )
+        self.notice_refresh_row = SpinRow(
+            FIF.SYNC,
+            '公告刷新间隔',
+            '主页校园网公告的自动刷新周期',
+            minimum=1,
+            maximum=240,
+            suffix='分钟',
+            parent=notify,
+        )
+        for row in (
+            self.notify_row,
+            self.notify_drop_row,
+            self.notify_app_name_row,
+            self.notice_refresh_row,
+        ):
+            notify.add(row)
+        self._register(
+            notify,
+            [
+                self.notify_row,
+                self.notify_drop_row,
+                self.notify_app_name_row,
+                self.notice_refresh_row,
+            ],
+        )
+
+        startup = self._new_card(layout, '启动与托盘', '开机启动与关闭行为')
         self.auto_launch_row = SwitchRow(
             FIF.UPDATE,
             '开机自动启动',
             '写入当前用户的启动项，登录后自动运行',
-            parent=appearance,
+            parent=startup,
         )
         self.start_min_row = SwitchRow(
             FIF.HOME,
             '启动后最小化',
             '开机自启时直接缩到托盘，不打扰',
-            parent=appearance,
+            parent=startup,
         )
-        self.home_package_row = SwitchRow(
-            FIF.CHAT,
-            '主页显示学校套餐',
-            '在主页展示套餐名称、到期时间与流量（来自学校自助系统）',
-            parent=appearance,
+        self.tray_row = SwitchRow(
+            FIF.CLOSE,
+            '关闭时最小化到托盘',
+            '关闭窗口不退出程序，继续后台守护',
+            parent=startup,
         )
-        self.home_notice_row = SwitchRow(
-            FIF.MESSAGE,
-            '主页显示校园网公告',
-            '关闭公告卡后，这里重新打开会清掉关闭记录并再读一次',
-            parent=appearance,
+        for row in (self.auto_launch_row, self.start_min_row, self.tray_row):
+            startup.add(row)
+        self._register(
+            startup,
+            [self.auto_launch_row, self.start_min_row, self.tray_row],
         )
+
+        advanced = self._new_card(layout, '高级', '面向调试与排障的选项')
         self.developer_row = SwitchRow(
             FIF.ROBOT,
             '开发者模式',
             '在左侧导航底部显示「开发者」页：可逐个调用接口并查看原始返回',
-            parent=appearance,
+            parent=advanced,
         )
-        for card in (
-            self.app_name_row,
-            self.theme_row,
-            self.mica_row,
-            self.tray_row,
-            self.notify_row,
-            self.auto_launch_row,
-            self.start_min_row,
-            self.home_package_row,
-            self.home_notice_row,
-            self.developer_row,
-        ):
-            appearance.addSettingCard(card)
-        layout.addWidget(appearance)
-        self._register(
-            appearance,
-            [
-                self.app_name_row,
-                self.theme_row,
-                self.mica_row,
-                self.tray_row,
-                self.notify_row,
-                self.auto_launch_row,
-                self.start_min_row,
-                self.home_package_row,
-                self.home_notice_row,
-                self.developer_row,
-            ],
-        )
+        advanced.add(self.developer_row)
+        self._register(advanced, [self.developer_row])
+        layout.addStretch(1)
 
-        # 维护
-        maintenance = SettingCardGroup('维护', self)
-        open_dir = ButtonRow(
-            FIF.FOLDER,
-            '数据目录',
-            '配置、流量历史与内置浏览器数据都放在这里',
-            '打开目录',
-            parent=maintenance,
-        )
-        open_dir.clicked.connect(lambda: self.service.open_data_dir())
-        maintenance.addSettingCard(open_dir)
+    # ------------------------------------------------------------------
+    # 「关于」分组
+    # ------------------------------------------------------------------
+    def _build_about_page(self) -> None:
+        page, layout = self._create_page('关于', '版本、许可证与开源致谢')
 
-        reset_all = ButtonRow(
-            FIF.DELETE,
-            '重置全部设置',
-            '恢复出厂配置（账号密码也会清除）',
-            '重置设置',
-            parent=maintenance,
-        )
-        reset_all.clicked.connect(self.reset_all)
-        maintenance.addSettingCard(reset_all)
-        layout.addWidget(maintenance)
-        self._register(maintenance, [open_dir, reset_all])
-
-        # 关于
-        self.about_card = Card('关于', parent=self)
+        self.about_card = Card('关于', parent=page)
 
         # 品牌区：图标在左、纵向居中于「标题 + 一句话简介」两行之间，右侧文字两行左对齐
         brand = QHBoxLayout()
@@ -559,11 +778,10 @@ class SettingsPage(QWidget):
         self.about_card.add_layout(brand)
         self.about_card.add(divider(self.about_card))
 
-        # 三栏：版本信息 / 链接与许可 / 开源致谢
-        columns = QGridLayout()
-        columns.setContentsMargins(0, 0, 0, 0)
-        columns.setHorizontalSpacing(32)
-        columns.setVerticalSpacing(0)
+        # 版本信息与链接并排，致谢放在下一行，避免窄窗口下三栏被压扁。
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(36)
 
         info = QWidget(self.about_card)
         info_box = QVBoxLayout(info)
@@ -584,9 +802,9 @@ class SettingsPage(QWidget):
         )
         info_box.addWidget(self.about_grid)
         info_box.addStretch(1)
-        info.setMinimumWidth(268)
-        info.setMaximumWidth(380)
-        columns.addWidget(info, 0, 0, Qt.AlignTop)
+        info.setMinimumWidth(260)
+        info.setMaximumWidth(420)
+        top.addWidget(info, 0, Qt.AlignTop)
 
         links = QWidget(self.about_card)
         links_box = QVBoxLayout(links)
@@ -612,7 +830,11 @@ class SettingsPage(QWidget):
         feedback_link.setMinimumWidth(150)
         links_box.addWidget(feedback_link)
         links_box.addStretch(1)
-        columns.addWidget(links, 0, 1, Qt.AlignTop)
+        top.addWidget(links, 0, Qt.AlignTop)
+        top.addStretch(1)
+        self.about_card.add_layout(top)
+
+        self.about_card.add(divider(self.about_card))
 
         thanks = QWidget(self.about_card)
         thanks_box = QVBoxLayout(thanks)
@@ -635,72 +857,77 @@ class SettingsPage(QWidget):
         ack_grid.setColumnStretch(0, 1)
         thanks_box.addLayout(ack_grid)
         thanks_box.addStretch(1)
-        columns.addWidget(thanks, 0, 2, Qt.AlignTop)
-        columns.setColumnStretch(0, 0)
-        columns.setColumnStretch(1, 0)
-        columns.setColumnStretch(2, 1)
-        self.about_card.add_layout(columns)
+        self.about_card.add(thanks)
 
         layout.addWidget(self.about_card)
-        self._loose.append(self.about_card)
-
+        self._register(self.about_card, [])
         layout.addStretch(1)
-        self._wire()
 
-    def _register(self, group: SettingCardGroup, cards: list[QWidget]) -> None:
+    # ------------------------------------------------------------------
+    # 导航与主题
+    # ------------------------------------------------------------------
+    def switch_group(self, index: int) -> None:
+        """切换一级分组；只改 QStackedWidget 当前页，不触碰任何配置。"""
+        if self.stack is None or not 0 <= index < self.stack.count():
+            return
+        self.stack.setCurrentIndex(index)
+        if 0 <= index < len(self._nav_buttons):
+            self._nav_buttons[index].setChecked(True)
+
+    def _on_group_changed(self, index: int) -> None:
+        if 0 <= index < len(self._nav_buttons):
+            self._nav_buttons[index].setChecked(True)
+
+    def _apply_nav_style(self) -> None:
+        """按当前主题重绘左侧导航（选中项带强调色背景与左侧指示条）。"""
+        if self.nav_bar is None:
+            return
+        accent = theme.color('accent')
+        soft = theme.color('accent_soft')
+        text = theme.color('text')
+        muted = theme.color('text_muted')
+        border = theme.color('card_border')
+        self.nav_bar.setStyleSheet(
+            f"""
+#SettingsNavBar {{
+    background: transparent;
+    border-right: 1px solid {border};
+}}
+QPushButton#SettingsNavButton {{
+    background: transparent;
+    border: none;
+    border-left: 3px solid transparent;
+    border-radius: 8px;
+    color: {text};
+    font-size: 14px;
+    padding: 0 12px 0 13px;
+    text-align: left;
+}}
+QPushButton#SettingsNavButton:hover {{
+    background: {soft};
+}}
+QPushButton#SettingsNavButton:checked {{
+    background: {soft};
+    border-left: 3px solid {accent};
+    color: {accent};
+    font-weight: 600;
+}}
+QPushButton#SettingsNavButton:checked:hover {{
+    background: {soft};
+    color: {accent};
+}}
+QPushButton#SettingsNavButton:disabled {{
+    color: {muted};
+}}
+"""
+        )
+
+    def _register(self, group: QWidget, cards: list[QWidget]) -> None:
         self._groups.append((group, cards))
 
-    def showEvent(self, event) -> None:
-        super().showEvent(event)
-        # 延后一帧：等样式表与布局稳定后再统一修正分组高度
-        QTimer.singleShot(0, self._fix_group_heights)
-        QTimer.singleShot(150, self._fix_group_heights)
-
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        self._fix_group_heights()
-
-    def _fix_group_heights(self) -> None:
-        """修 SettingCardGroup 那片多余的空白（以及随后的重叠）。
-
-        qfluentwidgets 的 ``SettingCardGroup`` 用 ``ExpandLayout`` 管卡片，而那个布局：
-
-        * ``heightForWidth()`` 读的是**控件当时的高度**，并且只在 ``addSettingCard`` 时算一次 ——
-          那时卡片还没被样式表撑到 70px，算出来的高度偏大，之后再也不重算；
-        * ``addWidget()`` 甚至不往 ``__items`` 里放，``count()`` 永远是 0。
-
-        结果就是分组底部留出一大片空白（实测「自动连接与认证」分组高 647，内容只有 ~290）。
-        只调用 ``adjustSize()`` 会把它改矮，但父布局不会跟着重排，卡片就会**叠在一起**。
-
-        所以这里改成确定性做法：按子控件的真实高度算好总高并**固定**分组高度，
-        最后强制父布局立刻重排一次。
-        """
-        for group, cards in self._groups:
-            visible = [card for card in cards if card.isVisible()]
-            if not visible:
-                continue
-            spacing = 2
-            body = sum(
-                max(card.height(), card.minimumSizeHint().height()) for card in visible
-            )
-            title = 0
-            label = getattr(group, 'titleLabel', None)
-            if label is not None:
-                title = label.height() or 29
-            total = title + (12 if title else 0) + body + spacing * max(0, len(visible) - 1) + 10
-            try:
-                group.setFixedHeight(total)
-            except Exception:
-                continue
-
-        layout = getattr(self, '_body_layout', None)
-        if layout is not None:
-            try:
-                layout.invalidate()
-                layout.activate()
-            except Exception:
-                return
-
+    # ------------------------------------------------------------------
+    # 配置绑定
+    # ------------------------------------------------------------------
     def _wire(self) -> None:
         def on(signal, handler):
             """包装一层：回填配置期间忽略控件的变更信号。"""
@@ -734,10 +961,26 @@ class SettingsPage(QWidget):
             self.portal_url_row.edit.editingFinished,
             lambda: self._save({'custom_portal_url': self.portal_url_row.text().strip()}),
         )
+        on(
+            self.probe_url_row.edit.editingFinished,
+            lambda: self._save({'custom_probe_url': self.probe_url_row.text().strip()}),
+        )
         on(self.retry_count_row.changed, lambda v: self._save({'retry_count': int(v)}))
         on(
             self.retry_delay_row.changed,
             lambda v: self._save({'retry_delay_ms': int(v) * 1000}),
+        )
+        on(
+            self.auth_timeout_row.changed,
+            lambda v: self._save({'auth_timeout_ms': int(v)}),
+        )
+        on(
+            self.wifi_wait_row.changed,
+            lambda v: self._save({'wifi_connect_wait_ms': int(v)}),
+        )
+        on(
+            self.reconnect_delay_row.changed,
+            lambda v: self._save({'reconnect_delay_ms': int(v)}),
         )
         on(
             self.interval_row.changed,
@@ -750,6 +993,10 @@ class SettingsPage(QWidget):
         on(self.quota_auto_row.changed, self._on_quota_auto)
         on(self.quota_row.changed, lambda v: self._save({'monthly_quota_gb': float(v)}))
         on(
+            self.monthly_start_row.changed,
+            lambda v: self._save({'monthly_start_day': int(v)}),
+        )
+        on(
             self.retention_row.changed,
             lambda v: self._save({'traffic_retention_days': int(v)}),
         )
@@ -757,6 +1004,16 @@ class SettingsPage(QWidget):
         on(self.mica_row.changed, self._on_mica)
         on(self.tray_row.changed, lambda v: self._save({'close_to_tray': v}))
         on(self.notify_row.changed, lambda v: self._save({'show_notification': v}))
+        on(
+            self.notify_app_name_row.edit.editingFinished,
+            lambda: self._save(
+                {'notify_app_name': self.notify_app_name_row.text().strip()}
+            ),
+        )
+        on(
+            self.notice_refresh_row.changed,
+            lambda v: self._save({'notice_refresh_minutes': int(v)}),
+        )
         on(self.auto_launch_row.changed, self._on_auto_launch)
         on(self.start_min_row.changed, lambda v: self._save({'start_minimized': v}))
         on(self.home_package_row.changed, self._on_home_package)
@@ -803,8 +1060,16 @@ class SettingsPage(QWidget):
         self.driver_row.set_value(str(config.get('driver') or 'auto'))
         self.acip_row.set_text(str(config.get('acip') or ''))
         self.portal_url_row.set_text(str(config.get('custom_portal_url') or ''))
+        self.probe_url_row.set_text(str(config.get('custom_probe_url') or ''))
         self.retry_count_row.set_value(int(config.get('retry_count') or 0))
         self.retry_delay_row.set_value(int((config.get('retry_delay_ms') or 8000) / 1000))
+        self.auth_timeout_row.set_value(int(config.get('auth_timeout_ms') or 12000))
+        self.wifi_wait_row.set_value(
+            int(config.get('wifi_connect_wait_ms') or 2500)
+        )
+        self.reconnect_delay_row.set_value(
+            int(config.get('reconnect_delay_ms') or 1500)
+        )
 
         self.interval_row.set_value(int((config.get('traffic_interval_ms') or 5000) / 1000))
         self.traffic_only_row.set_checked(
@@ -814,6 +1079,7 @@ class SettingsPage(QWidget):
         self.quota_auto_row.set_checked(auto_quota)
         self.quota_row.set_value(float(config.get('monthly_quota_gb') or 0))
         self.quota_row.setEnabled(not auto_quota)
+        self.monthly_start_row.set_value(int(config.get('monthly_start_day') or 1))
         self.retention_row.set_value(int(config.get('traffic_retention_days') or 120))
 
         self.theme_row.set_value(str(config.get('theme') or 'auto'))
@@ -821,6 +1087,10 @@ class SettingsPage(QWidget):
         self.mica_row.set_checked(bool(config.get('mica_effect')))
         self.tray_row.set_checked(bool(config.get('close_to_tray')))
         self.notify_row.set_checked(bool(config.get('show_notification')))
+        self.notify_app_name_row.set_text(str(config.get('notify_app_name') or ''))
+        self.notice_refresh_row.set_value(
+            int(config.get('notice_refresh_minutes') or 10)
+        )
         self.auto_launch_row.set_checked(bool(config.get('auto_launch')))
         self.start_min_row.set_checked(bool(config.get('start_minimized')))
         self.home_package_row.set_checked(bool(config.get('home_show_package', True)))
@@ -896,6 +1166,7 @@ class SettingsPage(QWidget):
     def _on_theme(self, value: str) -> None:
         self._save({'theme': value})
         theme.apply_theme(value)
+        self._apply_nav_style()
         if self._window is not None:
             self._window.refresh_theme()
 
@@ -922,10 +1193,10 @@ class SettingsPage(QWidget):
     def _on_auto_launch(self, value: bool) -> None:
         """开机自启：写**计划任务**（需要提权的程序走 Run 键会被系统静默跳过）。
 
-结果如实反馈 —— 之前"明明勾了、开机就是不启动"的原因就是：
-程序要求管理员权限，Windows 会跳过 Run 键里的提权程序，
-而界面只记住了勾选状态、没有反映系统的真实情况。
-"""
+        结果如实反馈 —— 之前"明明勾了、开机就是不启动"的原因就是：
+        程序要求管理员权限，Windows 会跳过 Run 键里的提权程序，
+        而界面只记住了勾选状态、没有反映系统的真实情况。
+        """
         self._save({'auto_launch': value})
 
         def done(result: Any) -> None:
@@ -1118,6 +1389,7 @@ class SettingsPage(QWidget):
             ]
             current = list(self._config.get('wifi_allow_list') or [])
             from ...net import wifi as wifi_module
+
             added = []
             for ssid in found:
                 if not ssid:
@@ -1169,7 +1441,7 @@ class SettingsPage(QWidget):
         run_async(self.service.reset_config, on_done=done)
 
     def filter_rows(self, text: str) -> None:
-        """按关键字显示/隐藏设置分组与自定义卡片。"""
+        """按关键字显示/隐藏各分组页里的卡片与设置行。"""
         keyword = (text or '').strip().lower()
 
         def title_of(widget) -> str:
@@ -1183,13 +1455,14 @@ class SettingsPage(QWidget):
             except Exception:
                 return ''
 
-        for group, cards in self._groups:
-            matched = False
-            for card in cards:
-                hit = not keyword or keyword in title_of(card).lower()
-                card.setVisible(hit)
+        for card, rows in self._groups:
+            card_hit = keyword in title_of(card).lower()
+            matched = card_hit or not keyword
+            for row in rows:
+                hit = card_hit or not keyword or keyword in title_of(row).lower()
+                row.setVisible(hit)
                 matched = matched or hit
-            group.setVisible(matched or not keyword)
+            card.setVisible(matched)
 
         for card in self._loose:
             card.setVisible(not keyword or keyword in title_of(card).lower())
@@ -1221,7 +1494,7 @@ class SettingsPage(QWidget):
             )
 
     def on_theme_changed(self) -> None:
-        pass
+        self._apply_nav_style()
 
     def append_log(self, entry: dict) -> None:
         pass
@@ -1231,6 +1504,7 @@ def _app_version() -> str:
     """程序版本号（与 main.py 保持一致）。"""
     try:
         from main import __version__
+
         return str(__version__)
     except Exception:
-        return '1.6.0'
+        return '1.7.0'

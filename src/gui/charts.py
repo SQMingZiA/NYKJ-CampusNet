@@ -7,15 +7,19 @@
 """
 from __future__ import annotations
 
+import calendar
 import datetime as dt
 import time
 from collections import deque
 from typing import Any
 
 import pyqtgraph as pg
-from PyQt5.QtCore import QPoint, QRect, QSize, Qt, pyqtSignal
+from PyQt5.QtCore import QPoint, QRect, QRectF, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QPainter, QPen
-from PyQt5.QtWidgets import QSizePolicy, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
+
+from qfluentwidgets import FluentIcon as FIF
+from qfluentwidgets import StrongBodyLabel, TransparentToolButton
 
 from . import theme
 from .formatting import format_bytes, format_rate
@@ -373,115 +377,236 @@ class HistoryChart(QWidget):
 
 
 class HeatmapChart(QWidget):
-    """GitHub 贡献图样式的每日用量热力图（纯 QWidget 自绘）。
+    """月历样式的每日用量热力图（纯 ``QWidget`` 自绘）。
 
-    格子随控件宽度自适应：窄窗口回到 16px 一格，宽窗口放大到最多 22px，
-    并把整块网格水平、垂直居中，避免右边留下大片空白、看起来像"偏了"。
+    一张卡只显示**一个月**：顶部是「‹ 2026 年 11 月 ›」导航，下面是
+    周一开头的星期表头与 6×7 的日期网格。格子随控件宽度在 40~64px 之间
+    自适应，整块网格水平居中；颜色按当月最大用量分 4 级强调色。
+    绘制几何统一由 :meth:`_layout` 算出，``paintEvent`` / ``cell_at`` /
+    tooltip 共用同一套坐标，避免"画面居中但点击位置没跟上"。
     """
 
     dayClicked = pyqtSignal(str)
+    monthChanged = pyqtSignal(int, int)
 
-    CELL = 16
-    MAX_CELL = 22
-    GAP = 3
-    LEFT_W = 34
-    TOP_H = 24
+    CELL_MIN = 40
+    CELL_MAX = 64
+    GAP = 4
+    RADIUS = 6
+    SIDE_PAD = 8
+    MONTH_BAR_H = 40
+    WEEKDAY_H = 24
+    WEEKDAY_LABELS = ("一", "二", "三", "四", "五", "六", "日")
+    _LEVEL_ALPHA = (0.25, 0.45, 0.7, 1.0)
+    _FALLBACK_MIN_MONTH = (2025, 1)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._rows: list[dict[str, Any]] = []
-        self._grid: dict[tuple[int, int], dict[str, Any]] = {}
-        self._week_count = 12
-        self._month_labels: list[tuple[int, str]] = []
-        self._max_total = 0
+        self._by_date: dict[str, dict[str, Any]] = {}
+        self._cells: dict[tuple[int, int], dict[str, Any]] = {}
+        self._month_max = 0
         self.selected_date: str | None = None
-        # 绘制几何，由 _layout() 统一算出来，paintEvent / cell_at 共用。
-        self._origin_x = float(self.LEFT_W)
-        self._origin_y = float(self.TOP_H)
-        self._cell = float(self.CELL)
-        self._pitch = float(self.CELL + self.GAP)
+
+        today = dt.date.today()
+        self._year = today.year
+        self._month = today.month
+        self._min_key = self._key(*self._FALLBACK_MIN_MONTH)
+        self._max_key = self._key(today.year, today.month)
+        self._cell = float(self.CELL_MIN)
+        self._pitch = float(self.CELL_MIN + self.GAP)
+        self._origin_x = 0.0
+        self._origin_y = float(self.MONTH_BAR_H + self.WEEKDAY_H)
+        self._weekday_y = float(self.MONTH_BAR_H)
+        self._hover_key: tuple[int, int] | None = None
+
         self.setMouseTracking(True)
-        self.setMinimumHeight(150)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self.setToolTip("把鼠标移到格子上可查看当天用量；点一下选中当天")
+        self.setMinimumSize(self.minimumSizeHint())
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setToolTip("把鼠标移到日期上可查看当天用量；点一下选中当天")
 
-    def set_days(self, rows: list[dict[str, Any]]) -> None:
-        """设置每日数据（按日期升序，最后一天是今天）。"""
-        self._rows = [dict(item) for item in (rows or [])]
-        self._max_total = max(
-            (int(item.get("total") or 0) for item in self._rows), default=0
-        )
+        self._header = QWidget(self)
+        header_layout = QHBoxLayout(self._header)
+        header_layout.setContentsMargins(8, 0, 8, 0)
+        header_layout.setSpacing(4)
+        header_layout.addStretch(1)
+
+        self.prev_button = TransparentToolButton(self._header)
+        self.prev_button.setIcon(FIF.LEFT_ARROW)
+        self.prev_button.setIconSize(QSize(14, 14))
+        self.prev_button.setFixedSize(32, 32)
+        self.prev_button.setToolTip("上个月")
+        self.prev_button.clicked.connect(self.prev_month)
+        header_layout.addWidget(self.prev_button)
+
+        self.month_label = StrongBodyLabel("", self._header)
+        self.month_label.setAlignment(Qt.AlignCenter)
+        header_layout.addWidget(self.month_label)
+
+        self.next_button = TransparentToolButton(self._header)
+        self.next_button.setIcon(FIF.RIGHT_ARROW)
+        self.next_button.setIconSize(QSize(14, 14))
+        self.next_button.setFixedSize(32, 32)
+        self.next_button.setToolTip("下个月")
+        self.next_button.clicked.connect(self.next_month)
+        header_layout.addWidget(self.next_button)
+        header_layout.addStretch(1)
+
         self._rebuild_cells()
-        if self.selected_date and self.selected_date not in self._grid_dates():
-            self.selected_date = None
+        self._sync_month_ui()
+
+    # ------------------------------------------------------------------ 月份
+    @staticmethod
+    def _key(year: int, month: int) -> int:
+        return int(year) * 12 + int(month) - 1
+
+    @property
+    def current_month(self) -> tuple[int, int]:
+        """当前显示的 ``(年, 月)``。"""
+        return (self._year, self._month)
+
+    def _month_key(self) -> int:
+        return self._key(self._year, self._month)
+
+    def _sync_month_ui(self) -> None:
+        self.month_label.setText(f"{self._year} 年 {self._month} 月")
+        key = self._month_key()
+        self.prev_button.setEnabled(key > self._min_key)
+        self.next_button.setEnabled(key < self._max_key)
+        self.prev_button.setToolTip(
+            "上个月" if key > self._min_key else "已经是最早的数据月份"
+        )
+        self.next_button.setToolTip(
+            "下个月" if key < self._max_key else "已经是最新月份"
+        )
+
+    def _set_month_key(self, key: int, emit: bool = True) -> bool:
+        """切换到 ``key`` 对应的月份；返回是否真的发生了切换。"""
+        key = max(self._min_key, min(self._max_key, int(key)))
+        changed = key != self._month_key()
+        if changed:
+            self._year, month0 = divmod(key, 12)
+            self._month = month0 + 1
+            if self.selected_date and self.selected_date[:7] != self._month_prefix():
+                self.selected_date = None
+        self._rebuild_cells()
+        self._sync_month_ui()
         self._layout()
-        self.updateGeometry()
         self.update()
+        if changed and emit:
+            self.monthChanged.emit(self._year, self._month)
+        return changed
 
-    def clear(self) -> None:
-        """清空数据与选中状态。"""
-        self._rows = []
-        self._grid = {}
-        self._month_labels = []
-        self._max_total = 0
-        self._week_count = 12
-        self.selected_date = None
-        self._layout()
-        self.updateGeometry()
-        self.update()
+    def _month_prefix(self) -> str:
+        return f"{self._year:04d}-{self._month:02d}"
 
-    def _grid_dates(self) -> set[str]:
-        return {str(item.get("date") or "") for item in self._rows}
+    def prev_month(self) -> None:
+        """切到上一个月（受最早数据月份限制）。"""
+        self._set_month_key(self._month_key() - 1)
 
-    def _rebuild_cells(self) -> None:
-        """按自然周（周一为列首）把日期铺进网格。"""
-        self._grid = {}
-        self._month_labels = []
-        dated: list[tuple[dt.date, dict[str, Any]]] = []
+    def next_month(self) -> None:
+        """切到下一个月（到本月为止）。"""
+        self._set_month_key(self._month_key() + 1)
+
+    def month_total(self) -> int:
+        """当前显示月份所有日期的用量合计。"""
+        return sum(int(item.get("total") or 0) for item in self._cells.values())
+
+    # ------------------------------------------------------------------ 数据
+    def set_days(self, rows: list[dict[str, Any]]) -> None:
+        """设置每日数据。
+
+        ``rows`` 为 ``[{"date", "rx", "tx", "total"}, ...]``，可以跨越多个月。
+        设置后默认显示**最新一条数据所在的月份**（不超过本月）；最早可翻到
+        数据里最早的月份，没有数据时最早回退到 2025-01。
+        """
+        self._rows = [dict(item) for item in (rows or [])]
+        self._by_date = {}
+        dated: list[dt.date] = []
         for item in self._rows:
             raw = str(item.get("date") or "")
             try:
                 day = dt.date.fromisoformat(raw[:10])
-            except ValueError:
+            except (TypeError, ValueError):
                 continue
-            dated.append((day, item))
-        if not dated:
-            self._week_count = 12
-            return
+            item["date"] = day.isoformat()
+            self._by_date[day.isoformat()] = item
+            dated.append(day)
 
-        first_day = min(day for day, _ in dated)
-        first_monday = first_day - dt.timedelta(days=first_day.weekday())
         today = dt.date.today()
-        last_day = max(today, max(day for day, _ in dated))
-        last_monday = last_day - dt.timedelta(days=last_day.weekday())
-        self._week_count = max(1, (last_monday - first_monday).days // 7 + 1)
+        self._max_key = self._key(today.year, today.month)
+        if dated:
+            first = min(dated)
+            self._min_key = self._key(first.year, first.month)
+            target = self._key(max(dated).year, max(dated).month)
+        else:
+            self._min_key = self._key(*self._FALLBACK_MIN_MONTH)
+            target = self._max_key
+        self._min_key = min(self._min_key, self._max_key)
+        self._set_month_key(target)
 
-        seen_months: set[tuple[int, int]] = set()
-        for day, item in dated:
-            column = (day - first_monday).days // 7
-            if column < 0 or column >= self._week_count:
+    def clear(self) -> None:
+        """清空数据、选中状态并回到本月。"""
+        self._rows = []
+        self._by_date = {}
+        self._cells = {}
+        self._month_max = 0
+        self.selected_date = None
+        today = dt.date.today()
+        self._min_key = self._key(*self._FALLBACK_MIN_MONTH)
+        self._max_key = self._key(today.year, today.month)
+        self._set_month_key(self._max_key)
+        self._hover_key = None
+        self.setToolTip("把鼠标移到日期上可查看当天用量；点一下选中当天")
+        self.unsetCursor()
+
+    def _rebuild_cells(self) -> None:
+        """按当前月份铺出 6×7 网格；月外位置留空。"""
+        self._cells = {}
+        self._month_max = 0
+        first = dt.date(self._year, self._month, 1)
+        lead = first.weekday()  # 周一 = 0
+        days = calendar.monthrange(self._year, self._month)[1]
+        for day_number in range(1, days + 1):
+            day = dt.date(self._year, self._month, day_number)
+            iso = day.isoformat()
+            raw = self._by_date.get(iso) or {}
+            total = int(raw.get("total") or 0)
+            item = {
+                "date": iso,
+                "total": total,
+                "rx": int(raw.get("rx") or 0),
+                "tx": int(raw.get("tx") or 0),
+            }
+            index = lead + day_number - 1
+            row, column = divmod(index, 7)
+            if row >= 6:
                 continue
-            self._grid[(column, day.weekday())] = item
-            key = (day.year, day.month)
-            if day.day == 1 and key not in seen_months:
-                seen_months.add(key)
-                self._month_labels.append((column, f"{day.month}月"))
+            self._cells[(row, column)] = item
+            self._month_max = max(self._month_max, total)
 
+    # ------------------------------------------------------------------ 几何
     def _layout(self) -> None:
-        """算出格子大小与网格原点：宽度够就放大格子，并把网格居中。"""
-        weeks = max(1, self._week_count)
-        available = float(self.width()) - self.LEFT_W - 8
-        pitch = available / weeks if available > 0 else float(self.CELL + self.GAP)
-        pitch = max(float(self.CELL + self.GAP), min(float(self.MAX_CELL + self.GAP), pitch))
-        cell = max(float(self.CELL), pitch - self.GAP)
-        grid_w = weeks * pitch - self.GAP
-        grid_h = 7 * pitch - self.GAP
-        self._pitch = pitch
-        self._cell = cell
-        self._origin_x = self.LEFT_W + max(0.0, (available - grid_w) / 2.0)
-        self._origin_y = self.TOP_H + max(0.0, (self.height() - self.TOP_H - grid_h) / 2.0)
+        """统一计算格子尺寸、网格原点与星期表头位置。"""
+        width = float(max(1, self.width()))
+        available = max(0.0, width - 2 * self.SIDE_PAD)
+        cell = (available - 6 * self.GAP) / 7.0
+        cell = max(float(self.CELL_MIN), min(float(self.CELL_MAX), cell))
+        pitch = cell + self.GAP
+        grid_w = 7 * cell + 6 * self.GAP
+        grid_h = 6 * cell + 5 * self.GAP
 
-    def _cell_rect(self, column: int, row: int) -> QRect:
+        block_h = self.WEEKDAY_H + grid_h
+        free = max(0.0, float(self.height()) - self.MONTH_BAR_H)
+        top = self.MONTH_BAR_H + max(0.0, (free - block_h) / 2.0)
+
+        self._cell = cell
+        self._pitch = pitch
+        self._origin_x = (width - grid_w) / 2.0
+        self._weekday_y = top
+        self._origin_y = top + self.WEEKDAY_H
+
+    def _cell_rect(self, row: int, column: int) -> QRect:
         self._layout()
         return QRect(
             int(round(self._origin_x + column * self._pitch)),
@@ -490,126 +615,196 @@ class HeatmapChart(QWidget):
             int(round(self._cell)),
         )
 
-    def cell_at(self, pos: QPoint) -> dict[str, Any] | None:
-        """命中测试：返回 ``pos`` 所在格子的数据行，空格子/空白返回 ``None``。"""
+    def _cell_key_at(self, pos: QPoint) -> tuple[int, int] | None:
         self._layout()
-        x = int(pos.x()) - int(round(self._origin_x))
-        y = int(pos.y()) - int(round(self._origin_y))
+        x = float(pos.x()) - self._origin_x
+        y = float(pos.y()) - self._origin_y
         if x < 0 or y < 0:
             return None
-        column, offset_x = divmod(x, int(round(self._pitch)))
-        row, offset_y = divmod(y, int(round(self._pitch)))
-        if offset_x >= self._cell or offset_y >= self._cell:
+        column = int(x // self._pitch)
+        row = int(y // self._pitch)
+        if column < 0 or column >= 7 or row < 0 or row >= 6:
             return None
-        if column >= self._week_count or row >= 7:
+        if x - column * self._pitch >= self._cell or y - row * self._pitch >= self._cell:
             return None
-        return self._grid.get((column, row))
+        return (row, column)
 
+    def cell_at(self, pos: QPoint) -> dict[str, Any] | None:
+        """命中测试：返回日期 dict（``date/total/rx/tx``），空白格返回 ``None``。"""
+        key = self._cell_key_at(pos)
+        if key is None:
+            return None
+        return self._cells.get(key)
+
+    # ------------------------------------------------------------------ 配色
     def _cell_color(self, item: dict[str, Any]) -> QColor:
-        """按该图最大值的四分位分 4 级，叠加不同透明度。"""
+        """0 值用卡片浅灰；非 0 按当月最大值分 4 级强调色。"""
         total = int(item.get("total") or 0)
-        if total <= 0:
-            return QColor("#2B2B2B" if theme.is_dark() else "#EDEDED")
-        ratio = total / float(self._max_total or 1)
+        if total <= 0 or self._month_max <= 0:
+            return QColor(theme.color("card_alt"))
+        ratio = total / float(self._month_max)
         if ratio <= 0.25:
-            alpha = 0.28
+            alpha = self._LEVEL_ALPHA[0]
         elif ratio <= 0.5:
-            alpha = 0.5
+            alpha = self._LEVEL_ALPHA[1]
         elif ratio <= 0.75:
-            alpha = 0.72
+            alpha = self._LEVEL_ALPHA[2]
         else:
-            alpha = 1.0
+            alpha = self._LEVEL_ALPHA[3]
         color = QColor(theme.color("accent") or "#0F6CBD")
         color.setAlpha(int(round(255 * alpha)))
         return color
 
+    @staticmethod
+    def _text_color(fill: QColor) -> QColor:
+        """按格子叠在卡片底色上的亮度挑深/浅字，保证日号看得清。"""
+        base = QColor(theme.color("card") or "#FFFFFF")
+        alpha = max(0.0, min(1.0, fill.alphaF()))
+        red = base.red() * (1 - alpha) + fill.red() * alpha
+        green = base.green() * (1 - alpha) + fill.green() * alpha
+        blue = base.blue() * (1 - alpha) + fill.blue() * alpha
+        luminance = (0.299 * red + 0.587 * green + 0.114 * blue) / 255.0
+        return QColor("#FFFFFF" if luminance < 0.55 else "#1B1B1B")
+
+    # ------------------------------------------------------------------ 绘制
     def sizeHint(self) -> QSize:
-        weeks = max(7, self._week_count)
-        pitch = float(self.CELL + self.GAP)
+        cell = float(self.CELL_MAX)
         return QSize(
-            int(self.LEFT_W + weeks * pitch + 4),
-            int(self.TOP_H + 7 * pitch + 8),
+            int(7 * cell + 6 * self.GAP + 2 * self.SIDE_PAD),
+            int(self.MONTH_BAR_H + self.WEEKDAY_H + 6 * cell + 5 * self.GAP),
+        )
+
+    def minimumSizeHint(self) -> QSize:
+        cell = float(self.CELL_MIN)
+        return QSize(
+            int(7 * cell + 6 * self.GAP + 2 * self.SIDE_PAD),
+            int(self.MONTH_BAR_H + self.WEEKDAY_H + 6 * cell + 5 * self.GAP),
         )
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
+        if hasattr(self, "_header"):
+            self._header.setGeometry(0, 0, self.width(), self.MONTH_BAR_H)
         self._layout()
         self.update()
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
-        font = painter.font()
-        font.setPointSize(9)
-        painter.setFont(font)
-        painter.setPen(QColor(theme.color("text_muted")))
-
-        if not self._rows:
-            painter.drawText(self.rect(), Qt.AlignCenter, "暂无数据")
-            return
-
         self._layout()
-        pitch = self._pitch
-        cell = self._cell
-        for row, text in ((0, "一"), (2, "三"), (4, "五"), (6, "日")):
-            rect = QRect(
-                0,
-                int(round(self._origin_y + row * pitch)),
-                int(self.LEFT_W) - 6,
-                int(round(cell)),
-            )
-            painter.drawText(rect, Qt.AlignRight | Qt.AlignVCenter, text)
 
-        for column, text in self._month_labels:
-            rect = QRect(
-                int(round(self._origin_x + column * pitch)),
-                2,
-                int(round(pitch * 2 + cell)),
-                int(self.TOP_H) - 6,
+        header_font = painter.font()
+        header_font.setPointSize(9)
+        header_font.setBold(False)
+        painter.setFont(header_font)
+        painter.setPen(QColor(theme.color("text_muted")))
+        for column, text in enumerate(self.WEEKDAY_LABELS):
+            painter.drawText(
+                QRectF(
+                    self._origin_x + column * self._pitch,
+                    self._weekday_y,
+                    self._cell,
+                    self.WEEKDAY_H,
+                ),
+                Qt.AlignCenter,
+                text,
             )
-            painter.drawText(rect, Qt.AlignLeft | Qt.AlignVCenter, text)
 
-        for (column, row), item in self._grid.items():
-            rect = QRect(
-                int(round(self._origin_x + column * pitch)),
-                int(round(self._origin_y + row * pitch)),
-                int(round(cell)),
-                int(round(cell)),
-            )
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(self._cell_color(item))
-            painter.drawRoundedRect(rect, 3, 3)
+        day_font = painter.font()
+        day_font.setPointSize(10)
+        day_font.setBold(True)
+        painter.setFont(day_font)
 
-        if self.selected_date:
-            for (column, row), item in self._grid.items():
-                if str(item.get("date") or "") != self.selected_date:
-                    continue
-                painter.setPen(QPen(QColor(theme.color("accent")), 1))
-                painter.setBrush(Qt.NoBrush)
-                painter.drawRoundedRect(
-                    QRect(
-                        int(round(self._origin_x + column * pitch)),
-                        int(round(self._origin_y + row * pitch)),
-                        int(round(cell)) - 1,
-                        int(round(cell)) - 1,
-                    ),
-                    3,
-                    3,
+        blank = QColor(theme.color("card_border") or "#E5E5E5")
+        blank.setAlpha(45)
+        for row in range(6):
+            for column in range(7):
+                rect = QRectF(
+                    self._origin_x + column * self._pitch,
+                    self._origin_y + row * self._pitch,
+                    self._cell,
+                    self._cell,
                 )
-                break
+                item = self._cells.get((row, column))
+                if item is None:
+                    painter.setPen(Qt.NoPen)
+                    painter.setBrush(blank)
+                    painter.drawRoundedRect(rect, self.RADIUS, self.RADIUS)
+                    continue
+
+                fill = self._cell_color(item)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(fill)
+                painter.drawRoundedRect(rect, self.RADIUS, self.RADIUS)
+
+                total = int(item.get("total") or 0)
+                if total > 0:
+                    painter.setPen(self._text_color(fill))
+                else:
+                    painter.setPen(QColor(theme.color("text_muted")))
+                painter.drawText(rect, Qt.AlignCenter, str(int(item["date"][-2:])))
+
+        today = dt.date.today().isoformat()
+        for (row, column), item in self._cells.items():
+            date = str(item.get("date") or "")
+            rect = QRectF(
+                self._origin_x + column * self._pitch,
+                self._origin_y + row * self._pitch,
+                self._cell,
+                self._cell,
+            )
+            if date == self.selected_date:
+                pen = QPen(QColor(theme.color("accent")), 2.5)
+                inset = 1.8
+            elif date == today:
+                pen = QPen(QColor(theme.color("accent")), 1.4)
+                inset = 1.0
+            elif self._hover_key == (row, column):
+                hover = QColor(theme.color("text_secondary") or "#5C5C5C")
+                hover.setAlpha(150)
+                pen = QPen(hover, 1.0)
+                inset = 1.0
+            else:
+                continue
+            painter.setPen(pen)
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRoundedRect(
+                rect.adjusted(inset, inset, -inset, -inset),
+                self.RADIUS - 1,
+                self.RADIUS - 1,
+            )
+
+    # ------------------------------------------------------------------ 交互
+    def _tooltip_text(self, item: dict[str, Any] | None) -> str:
+        if item is None:
+            return ""
+        date = str(item.get("date") or "")
+        if int(item.get("total") or 0) <= 0:
+            return f"{date} · 没有记录"
+        return (
+            f"{date} · 共 {format_bytes(item.get('total'))}"
+            f"（↓ {format_bytes(item.get('rx'))} ↑ {format_bytes(item.get('tx'))}）"
+        )
 
     def mouseMoveEvent(self, event) -> None:
-        item = self.cell_at(event.pos())
+        key = self._cell_key_at(event.pos())
+        if key != self._hover_key:
+            self._hover_key = key
+            self.update()
+        item = self._cells.get(key) if key is not None else None
+        self.setToolTip(self._tooltip_text(item))
         if item is None:
-            self.setToolTip("")
-        elif int(item.get("total") or 0) <= 0:
-            self.setToolTip(f"{item.get('date')} · 没有记录")
+            self.unsetCursor()
         else:
-            self.setToolTip(
-                f"{item.get('date')} · 共 {format_bytes(item.get('total'))}"
-                f"（↓ {format_bytes(item.get('rx'))} ↑ {format_bytes(item.get('tx'))}）"
-            )
+            self.setCursor(Qt.PointingHandCursor)
         super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        if self._hover_key is not None:
+            self._hover_key = None
+            self.update()
+        self.unsetCursor()
+        super().leaveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
         if event.button() == Qt.LeftButton:
