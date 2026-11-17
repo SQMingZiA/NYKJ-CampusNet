@@ -1,8 +1,8 @@
-"""设置页：安卓式一级列表 + 二级分组页。
+"""设置页：一整页滚动 + 分组小节（Win11 设置的单页写法）。
 
-第一页是分组列表（通用 / 连接 / 流量与用量 / 通知与启动 / 关于），点一行
-进入该组的滚动页，组内顶部有返回按钮回到列表。所有控件只构建一次，
-切换分组不会重建控件，因此未保存的输入会原样保留，也不会触发保存。
+没有一级列表、没有大标题和返回按钮：从上到下依次是「通用 / 连接 / 流量与用量 /
+通知与启动 / 关于」五个小节，每节一个 16px 图标 + 15px 半粗标题，紧跟该节的卡片。
+所有控件只构建一次，切换小节只是滚动，不重建控件、不会触发保存。
 """
 
 from __future__ import annotations
@@ -23,7 +23,6 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QPushButton,
-    QStackedWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
@@ -39,7 +38,6 @@ from qfluentwidgets import (
     PushButton,
     TableWidget,
     TitleLabel,
-    TransparentToolButton,
 )
 
 from .. import theme
@@ -105,7 +103,7 @@ THEMES = [
 
 DEFAULT_SSIDS = ['NYKJ', 'CMCC-NYKJ', 'CMCCNYKJ', 'NYKY']
 
-# 左侧一级导航：(标题, 图标)。索引与 QStackedWidget 的页序一一对应。
+# 分组小节：(标题, 图标)，按此顺序自上而下排布。
 NAV_GROUPS = [
     ('通用', FIF.SETTING),
     ('连接', FIF.WIFI),
@@ -113,16 +111,6 @@ NAV_GROUPS = [
     ('通知与启动', FIF.MESSAGE),
     ('关于', FIF.INFO),
 ]
-
-# 一级菜单每行的副标题（与 NAV_GROUPS 同序）。
-MENU_SUBTITLES = [
-    '账号、外观与主页内容',
-    '自动连接、网络名单与认证',
-    '流量统计、套餐额度与数据管理',
-    '通知、启动方式与托盘',
-    '版本、许可与开源致谢',
-]
-
 
 def _about_section(text: str, parent: QWidget | None = None) -> CaptionLabel:
     """「关于」卡片里的小栏目标题（弱化色 + 半粗）。"""
@@ -132,66 +120,8 @@ def _about_section(text: str, parent: QWidget | None = None) -> CaptionLabel:
     return label
 
 
-class _MenuRow(CardWidget):
-    """Fluent 分组条目：直接用 CardWidget 的画法（圆角、描边、悬停/按下态）。
-
-    不再自己 ``paintEvent``：qfluentwidgets 的 ``CardWidget`` 已经是 Win11 设置
-    条目的样子——圆角 6px、1px 描边、悬停时底色微亮、按下时更深，跟随主题。
-    """
-
-    def __init__(self, title: str, subtitle: str, icon, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setObjectName('SettingsMenuRow')
-        self.setClickEnabled(True)
-        self.setBorderRadius(6)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setFixedHeight(64)
-
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(16, 10, 14, 10)
-        layout.setSpacing(14)
-
-        self.icon_label = QLabel(self)
-        self.icon_label.setObjectName('SettingsMenuIcon')
-        self.icon_label.setFixedSize(20, 20)
-        self.icon_label.setPixmap(icon.icon().pixmap(20, 20))
-        self.icon_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.icon_label, 0, Qt.AlignVCenter)
-
-        texts = QVBoxLayout()
-        texts.setContentsMargins(0, 0, 0, 0)
-        texts.setSpacing(1)
-        self.title_label = BodyLabel(title, self)
-        self.title_label.setObjectName('SettingsMenuTitle')
-        self.subtitle_label = CaptionLabel(subtitle, self)
-        self.subtitle_label.setObjectName('SettingsMenuSubtitle')
-        texts.addWidget(self.title_label)
-        texts.addWidget(self.subtitle_label)
-        layout.addLayout(texts, 1)
-
-        self.chevron = QLabel(self)
-        self.chevron.setObjectName('SettingsMenuChevron')
-        self.chevron.setFixedSize(12, 12)
-        self.chevron.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.chevron, 0, Qt.AlignVCenter)
-
-        self.refresh_theme()
-
-    def refresh_theme(self) -> None:
-        """标题/副标题/箭头按主题上色（Fluent 排版：14px 半粗 + 12px 次要色）。"""
-        text = theme.color('text')
-        secondary = theme.color('text_secondary')
-        self.title_label.setTextColor(text, text)
-        self.title_label.setStyleSheet('font-size: 14px; font-weight: 600;')
-        self.subtitle_label.setTextColor(secondary, secondary)
-        self.subtitle_label.setStyleSheet('font-size: 12px;')
-        self.chevron.setPixmap(
-            FIF.CHEVRON_RIGHT.icon(color=QColor(secondary)).pixmap(12, 12)
-        )
-
-
 class SettingsPage(QWidget):
-    """设置页（一级导航 + 二级分组页）。"""
+    """设置页：单页滚动的五个分组小节。"""
 
     def __init__(self, service, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -201,15 +131,12 @@ class SettingsPage(QWidget):
         self._config = {}
         # (Card, 该 Card 内的设置行)；供 filter_rows 使用。
         self._groups: list[tuple[QWidget, list[QWidget]]] = []
-        # 一级菜单 / 二级分组页 / 每页滚动区与内容布局。
-        self.menu_page: QWidget | None = None
-        self.stack: QStackedWidget | None = None
-        self._nav_buttons: list[_MenuRow] = []
-        self._back_buttons: list[Any] = []
-        self._headers: list[QWidget] = []
-        self._pages: list[QWidget] = []
-        self._scrolls: list[Any] = []
-        self._page_layouts: list[QVBoxLayout] = []
+        # 整页滚动区、各分组小节与小节标题（供主题刷新与定位）。
+        self.scroll: Any = None
+        self._sections: list[QWidget] = []
+        self._section_labels: list[BodyLabel] = []
+        self._section_icons: list[QLabel] = []
+        self._current_group = -1
         # 不参与分组高度修正的独立卡片（兼容旧代码）。
         self._loose: list[QWidget] = []
         # 回填配置期间抑制控件信号
@@ -228,100 +155,66 @@ class SettingsPage(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        self.stack = QStackedWidget(self)
-        outer.addWidget(self.stack, 1)
+        self.scroll, content = scroll_page(self, margins=(24, 16, 24, 24), spacing=24)
+        self.scroll.setObjectName('SettingsScroll')
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        outer.addWidget(self.scroll, 1)
 
-        self._build_menu_page()
         self._build_general_page()
         self._build_connection_page()
         self._build_traffic_page()
         self._build_notification_page()
         self._build_about_page()
 
-        self.stack.currentChanged.connect(self._on_group_changed)
+        for section in self._sections:
+            content.addWidget(section)
+        content.addStretch(1)
+
         self._apply_nav_style()
         # 控件信号统一在最后连接，避免构建期触发保存
         self._wire()
         self.go_home()
 
-    def _build_menu_page(self) -> None:
-        """Fluent 一级菜单：标题区 + 一列圆角条目（Win11 设置的入口列表）。"""
-        page = QWidget(self.stack)
-        page_layout = QVBoxLayout(page)
-        page_layout.setContentsMargins(0, 0, 0, 0)
-        page_layout.setSpacing(0)
+    def _create_page(self, title: str, subtitle: str = '') -> tuple[QWidget, QVBoxLayout]:
+        """创建一个分组小节：小节标题（图标 + 15px 半粗）+ 该节的卡片。"""
+        icon = FIF.SETTING
+        for name, group_icon in NAV_GROUPS:
+            if name == title:
+                icon = group_icon
+                break
 
-        scroll, layout = scroll_page(page, margins=(24, 16, 24, 20), spacing=4)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        page_layout.addWidget(scroll)
+        section = QWidget(self)
+        section.setObjectName('SettingsSection')
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
 
-        self.menu_title = TitleLabel('设置', page)
-        self.menu_title.setObjectName('SettingsMenuHead')
-        layout.addWidget(self.menu_title)
-        self.menu_subtitle = BodyLabel('按分组调整 CampusNet 的行为', page)
-        self.menu_subtitle.setObjectName('SettingsMenuLead')
-        layout.addWidget(self.menu_subtitle)
-        layout.addSpacing(10)
+        head = QHBoxLayout()
+        head.setContentsMargins(0, 0, 2, 0)
+        head.setSpacing(8)
+        icon_label = QLabel(section)
+        icon_label.setObjectName('SettingsSectionIcon')
+        icon_label.setFixedSize(16, 16)
+        icon_label.setPixmap(icon.icon().pixmap(16, 16))
+        icon_label.setAlignment(Qt.AlignCenter)
+        head.addWidget(icon_label, 0, Qt.AlignVCenter)
 
-        for index, (title_text, icon) in enumerate(NAV_GROUPS):
-            row = _MenuRow(title_text, MENU_SUBTITLES[index], icon, page)
-            row.clicked.connect(lambda _=False, i=index: self.switch_group(i))
-            layout.addWidget(row)
-            self._nav_buttons.append(row)
-        layout.addStretch(1)
+        title_label = BodyLabel(title, section)
+        title_label.setObjectName('SettingsSectionTitle')
+        if subtitle:
+            title_label.setToolTip(subtitle)
+        head.addWidget(title_label, 0, Qt.AlignVCenter)
+        head.addStretch(1)
+        layout.addLayout(head)
 
-        self.menu_page = page
-        self.stack.addWidget(page)
-
-    def _create_page(self, title: str, subtitle: str) -> tuple[QWidget, QVBoxLayout]:
-        """创建二级分组页：Fluent 页头（返回箭头 + 大标题 + 说明）+ 滚动内容。"""
-        page = QWidget(self.stack)
-        page_layout = QVBoxLayout(page)
-        page_layout.setContentsMargins(0, 0, 0, 0)
-        page_layout.setSpacing(0)
-
-        header = QWidget(page)
-        header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(24, 6, 24, 6)
-        header_layout.setSpacing(8)
-
-        back = TransparentToolButton(FIF.LEFT_ARROW, header)
-        back.setObjectName('SettingsBackButton')
-        back.setFixedSize(32, 32)
-        back.setIconSize(QSize(16, 16))
-        back.setToolTip('返回设置')
-        back.clicked.connect(self.go_home)
-        header_layout.addWidget(back, 0, Qt.AlignTop)
-
-        texts = QVBoxLayout()
-        texts.setContentsMargins(0, 0, 0, 0)
-        texts.setSpacing(0)
-        page_title = TitleLabel(title, header)
-        page_title.setObjectName('SettingsGroupTitle')
-        texts.addWidget(page_title)
-        description = BodyLabel(subtitle, header)
-        description.setObjectName('SettingsGroupSubtitle')
-        description.setWordWrap(True)
-        texts.addWidget(description)
-        header_layout.addLayout(texts, 1)
-        page_layout.addWidget(header)
-
-        scroll, layout = scroll_page(page, margins=(24, 8, 24, 16), spacing=14)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        page_layout.addWidget(scroll, 1)
-
-        self.stack.addWidget(page)
-        self._pages.append(page)
-        self._scrolls.append(scroll)
-        self._page_layouts.append(layout)
-        self._back_buttons.append(back)
-        self._headers.append(header)
-        return page, layout
+        self._sections.append(section)
+        self._section_labels.append(title_label)
+        self._section_icons.append(icon_label)
+        return section, layout
 
     def _new_card(self, layout: QVBoxLayout, title: str, subtitle: str = '') -> Card:
-        """在分组页里追加一张主题 Card。"""
-        card = Card(title, subtitle, parent=self.stack)
+        """在小节里追加一张主题 Card。"""
+        card = Card(title, subtitle)
         layout.addWidget(card)
         return card
 
@@ -425,7 +318,6 @@ class SettingsPage(QWidget):
         maintenance.add(open_dir)
         maintenance.add(reset_all)
         self._register(maintenance, [open_dir, reset_all])
-        layout.addStretch(1)
 
     # ------------------------------------------------------------------
     # 「连接」分组
@@ -477,7 +369,6 @@ class SettingsPage(QWidget):
         self.ssid_card = Card(
             '自动连接的网络名单',
             '支持写法互通：CMCC-NYKJ 与 CMCCNYKJ 视为同一个网络',
-            parent=self.stack,
         )
         rule = QHBoxLayout()
         rule.setSpacing(8)
@@ -623,7 +514,6 @@ class SettingsPage(QWidget):
                 self.reconnect_delay_row,
             ],
         )
-        layout.addStretch(1)
 
     # ------------------------------------------------------------------
     # 「流量与用量」分组
@@ -715,7 +605,6 @@ class SettingsPage(QWidget):
         data.add(export_row)
         data.add(reset_row)
         self._register(data, [export_row, reset_row])
-        layout.addStretch(1)
 
     # ------------------------------------------------------------------
     # 「通知与启动」分组
@@ -804,7 +693,6 @@ class SettingsPage(QWidget):
         )
         advanced.add(self.developer_row)
         self._register(advanced, [self.developer_row])
-        layout.addStretch(1)
 
     # ------------------------------------------------------------------
     # 「关于」分组
@@ -935,59 +823,38 @@ class SettingsPage(QWidget):
 
         layout.addWidget(self.about_card)
         self._register(self.about_card, [])
-        layout.addStretch(1)
 
     # ------------------------------------------------------------------
     # 导航与主题
     # ------------------------------------------------------------------
     def switch_group(self, index: int) -> None:
-        """进入第 ``index`` 个分组页（一级菜单是第 0 页）。"""
-        if self.stack is None or not 0 <= index < len(self._nav_buttons):
+        """滚动到第 ``index`` 个分组小节（找不到就忽略）。"""
+        if not 0 <= index < len(self._sections):
             return
-        self.stack.setCurrentIndex(index + 1)
-
-    def go_home(self) -> None:
-        """回到一级菜单列表。"""
-        if self.stack is not None:
-            self.stack.setCurrentIndex(0)
-
-    def current_group(self) -> int:
-        """当前所在分组；在一级菜单时返回 -1。"""
-        return self.stack.currentIndex() - 1 if self.stack is not None else -1
-
-    def _on_group_changed(self, index: int) -> None:
-        if index <= 0:
-            return
+        self._current_group = index
+        self.scroll.ensureWidgetVisible(self._sections[index], 0, 12)
         self._apply_nav_style()
 
+    def go_home(self) -> None:
+        """回到设置页顶部。"""
+        self._current_group = -1
+        self.scroll.verticalScrollBar().setValue(0)
+
+    def current_group(self) -> int:
+        """上一次定位到的分组；未定位时返回 -1。"""
+        return self._current_group
+
     def _apply_nav_style(self) -> None:
-        """按当前主题刷新一级列表与二级页头（Fluent 排版：28px 标题 + 14px 说明）。"""
+        """按当前主题刷新小节标题（Fluent 排版：15px 半粗 + 次要色图标）。"""
         text = theme.color('text')
         secondary = theme.color('text_secondary')
-        soft = theme.color('accent_soft')
-
-        if getattr(self, 'menu_title', None) is not None:
-            self.menu_title.setTextColor(text, text)
-            self.menu_title.setStyleSheet('font-size: 28px; font-weight: 600;')
-            self.menu_subtitle.setTextColor(secondary, secondary)
-            self.menu_subtitle.setStyleSheet('font-size: 14px;')
-
-        for row in self._nav_buttons:
-            row.refresh_theme()
-
-        for header in self._headers:
-            for label in header.findChildren(TitleLabel):
-                label.setTextColor(text, text)
-                label.setStyleSheet('font-size: 28px; font-weight: 600;')
-            for label in header.findChildren(BodyLabel):
-                label.setTextColor(secondary, secondary)
-                label.setStyleSheet('font-size: 14px;')
-
-        for button in self._back_buttons:
-            button.setStyleSheet(
-                f"QToolButton {{ background: transparent; border: none; border-radius: 4px; }}"
-                f"QToolButton:hover {{ background: {soft}; }}"
-                f"QToolButton:pressed {{ background: {theme.color('card_border')}; }}"
+        for label in self._section_labels:
+            label.setTextColor(text, text)
+            label.setStyleSheet('font-size: 15px; font-weight: 600;')
+        for index, icon_label in enumerate(self._section_icons):
+            icon = NAV_GROUPS[index][1] if index < len(NAV_GROUPS) else FIF.SETTING
+            icon_label.setPixmap(
+                icon.icon(color=QColor(secondary)).pixmap(16, 16)
             )
 
     def _register(self, group: QWidget, cards: list[QWidget]) -> None:
@@ -1575,4 +1442,4 @@ def _app_version() -> str:
 
         return str(__version__)
     except Exception:
-        return '1.8.1'
+        return '1.9.0'

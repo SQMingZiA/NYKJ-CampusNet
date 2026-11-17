@@ -965,4 +965,4 @@ def _app_version() -> str:
 
         return str(__version__)
     except Exception:
-        return "1.8.1"
+        return "1.9.0"
