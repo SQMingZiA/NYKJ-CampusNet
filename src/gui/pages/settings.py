@@ -67,7 +67,7 @@ if not hasattr(FIF, 'RENAME'):
     FIF.RENAME = FIF.EDIT
 
 # 仓库地址：换成你自己的 GitHub 仓库即可。
-GITHUB_URL = "https://github.com/campusnet/CampusNet"
+GITHUB_URL = "https://github.com/SQMingZiA/NYKJ-CampusNet"
 
 # 设置页位于 <仓库根>/src/gui/pages/settings.py，向上四层即项目根目录。
 PROJECT_ROOT = Path(__file__).resolve().parents[3]

@@ -8,6 +8,7 @@
 ![platform](https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?logo=windows&logoColor=white)
 ![gui](https://img.shields.io/badge/GUI-PyQt5%20%2B%20FluentUI-41CD52?logo=qt&logoColor=white)
 ![license](https://img.shields.io/badge/License-MIT-yellow.svg)
+[![repo](https://img.shields.io/badge/GitHub-SQMingZiA%2FNYKJ--CampusNet-181717?logo=github)](https://github.com/SQMingZiA/NYKJ-CampusNet)
 
 ---
 
@@ -80,8 +81,8 @@ flowchart LR
 ### 从源码运行
 
 ```powershell
-git clone https://github.com/<your-name>/CampusNet.git
-cd CampusNet
+git clone https://github.com/SQMingZiA/NYKJ-CampusNet.git
+cd NYKJ-CampusNet
 
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
