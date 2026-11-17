@@ -105,9 +105,9 @@ class HomePage(QWidget):
         title_row.addStretch(1)
 
         self.connect_button = PrimaryPushButton(FIF.SYNC, "检测并登录", self)
-        self.connect_button.clicked.connect(self.run_connect)
+        self.connect_button.clicked.connect(self._on_connect_clicked)
         self.connect_button.setToolTip(
-            "自动搜寻校园网 → 连接 → 提交认证 → 复测；没有网络时也会先扫描并连上"
+            "自动搜寻校园网 → 连接 → 提交认证 → 复测；还没填账号时会先带你去设置页"
         )
         title_row.addWidget(self.connect_button)
 
@@ -580,6 +580,29 @@ class HomePage(QWidget):
         if self._window is not None:
             self._window.open_portal_browser(self._state or None)
 
+    def _on_connect_clicked(self) -> None:
+        """没填账号时先把人送到设置页：认证必然失败，不如直接给入口。"""
+        if not self._has_account():
+            self._goto_settings_account()
+            return
+        self.run_connect()
+
+    def _has_account(self) -> bool:
+        try:
+            return bool(str(self.service.settings.get("username") or "").strip())
+        except Exception:
+            return False
+
+    def _goto_settings_account(self) -> None:
+        """跳到设置页，并把焦点落在「校园卡账号」输入框上。"""
+        self._goto_settings()
+        window = self._window
+        page = getattr(window, "settings_page", None)
+        row = getattr(page, "username_row", None)
+        edit = getattr(row, "edit", None)
+        if edit is not None:
+            QTimer.singleShot(120, lambda: (edit.setFocus(), edit.selectAll()))
+
     def run_connect(self) -> None:
         """执行一次「扫描校园网 → 连接 → 认证 → 复测」。
 
@@ -683,6 +706,8 @@ class HomePage(QWidget):
         busy = bool((self._state or {}).get("busy")) or self._manual_action
         if busy:
             text = "正在认证…"
+        elif not self._has_account():
+            text = "先填写账号"
         elif state_key == "online":
             text = "重新认证"
         elif self._last_failed:

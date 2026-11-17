@@ -17,8 +17,15 @@ import threading
 import time
 
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QAction, QApplication, QMenu, QSystemTrayIcon, QWidget
+from PyQt5.QtGui import QIcon, QKeySequence
+from PyQt5.QtWidgets import (
+    QAction,
+    QApplication,
+    QMenu,
+    QShortcut,
+    QSystemTrayIcon,
+    QWidget,
+)
 
 
 from qfluentwidgets import FluentIcon as FIF
@@ -117,9 +124,58 @@ class MainWindow(FluentWindow):
             pass
 
         self._build_tray()
+        self._install_shortcuts()
         self._wire_signals()
         self.switchTo(self.home_page)
         QTimer.singleShot(250, self._post_start)
+
+    def nav_pages(self) -> list[QWidget]:
+        """导航里的六个常驻页面，顺序与左侧导航一致（开发者页按需插入）。"""
+        return [
+            self.home_page,
+            self.wifi_page,
+            self.diag_page,
+            self.traffic_page,
+            self.account_page,
+            self.settings_page,
+        ]
+
+    def _install_shortcuts(self) -> None:
+        """全局快捷键：没有鼠标也能走完常用路径。"""
+        self._shortcuts: list[QShortcut] = []
+
+        def add(sequence: str, slot) -> None:
+            shortcut = QShortcut(QKeySequence(sequence), self)
+            shortcut.setContext(Qt.WindowShortcut)
+            shortcut.activated.connect(slot)
+            self._shortcuts.append(shortcut)
+
+        add("Ctrl+,", self.open_settings)
+        add("Ctrl+R", self.refresh_current_page)
+        add("Ctrl+Shift+W", self.open_portal_browser)
+        for index, page in enumerate(self.nav_pages(), start=1):
+            add(f"Ctrl+{index}", lambda target=page: self.switchTo(target))
+
+    def open_settings(self, section: int | None = None) -> None:
+        """打开设置页；``section`` 给了就顺带滚动到那一节。"""
+        self.show_window()
+        self.switchTo(self.settings_page)
+        if section is not None:
+            QTimer.singleShot(60, lambda: self.settings_page.switch_group(section))
+
+    def refresh_current_page(self) -> None:
+        """刷新当前页：优先 refresh()，其次 refresh_all()，都没有就提示。"""
+        page = self.stackedWidget.currentWidget()
+        for name in ("refresh", "refresh_all", "reload"):
+            method = getattr(page, name, None)
+            if callable(method):
+                method()
+                return
+        Toast.info(self, "刷新", "当前页面没有可刷新的内容。")
+
+    def show_window(self) -> None:
+        """把窗口叫到前台（托盘与快捷键共用）。"""
+        self._show_from_tray()
 
     def pages(self) -> list[QWidget]:
         return [
@@ -383,6 +439,9 @@ class MainWindow(FluentWindow):
         menu.addAction("立即检测并登录", self._quick_login)
         menu.addAction("打开认证页面（内置浏览器）", lambda: self.open_portal_browser())
         menu.addSeparator()
+        menu.addAction("设置…", lambda: self.open_settings())
+        menu.addAction("流量统计", lambda: self.open_traffic())
+        menu.addSeparator()
         menu.addAction("退出", self._quit_app)
 
         self.tray.setContextMenu(menu)
@@ -393,6 +452,11 @@ class MainWindow(FluentWindow):
         )
 
         self.tray.show()
+
+    def open_traffic(self) -> None:
+        """托盘菜单：跳到流量统计页并显示窗口。"""
+        self.show_window()
+        self.switchTo(self.traffic_page)
 
     def _show_from_tray(self) -> None:
         self.showNormal()
@@ -462,12 +526,19 @@ class MainWindow(FluentWindow):
         if self.service.settings.close_to_tray and not self._closing:
             event.ignore()
             self.hide()
-            self.tray.showMessage(
-                APP_TITLE,
-                "已最小化到托盘，右键托盘图标可退出",
-                QSystemTrayIcon.Information,
-                2500,
-            )
+            # 只在第一次提示，之后安静地缩到托盘（提示语重复反而烦）。
+            if not bool(self.service.settings.get("tray_hint_shown")):
+                self.tray.showMessage(
+                    APP_TITLE,
+                    "已最小化到托盘，右键托盘图标可退出；下次不再提示",
+                    QSystemTrayIcon.Information,
+                    2500,
+                )
+                try:
+                    self.service.settings.set("tray_hint_shown", True)
+                    self.service.settings.save()
+                except Exception:
+                    pass
             return
         self._closing = True
 

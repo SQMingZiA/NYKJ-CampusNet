@@ -94,6 +94,9 @@ DEFAULTS: dict[str, Any] = {
 
     "window_geometry": "",
 
+    # 只在第一次「关闭到托盘」时提示一句，之后安静地缩到托盘。
+    "tray_hint_shown": False,
+
     "home_show_package": True,
 }
 
@@ -303,6 +306,10 @@ class Settings:
 
         dismissed = self._data.get("notice_dismissed")
         self._data["notice_dismissed"] = dismissed.strip()[:64] if isinstance(dismissed, str) else ""
+
+        for flag in ("tray_hint_shown",):
+            if not isinstance(self._data.get(flag), bool):
+                self._data[flag] = bool(DEFAULTS[flag])
 
         patterns = self._data.get("wifi_allow_list")
         if not isinstance(patterns, list):
