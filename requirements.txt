@@ -5,7 +5,9 @@
 PyQt5>=5.15.10
 PyQtWebEngine>=5.15.6         # src/gui/browser.py：内置门户网页
 PyQt-Fluent-Widgets>=1.5.4    # qfluentwidgets：窗口 / 卡片 / 设置项控件
-PyQt-Frameless-Window>=0.3.3  # 无边框窗口拖拽与吸附（import qframelesswindow）
+# 注：无边框窗口（qframelesswindow）由 PyQt-Fluent-Widgets 传递依赖的
+# PyQt5-Frameless-Window 提供；不要再单独装 pyqt-frameless-window，
+# 那是另一个作者的同名模块，会和它抢 qframelesswindow 包。
 pyqtgraph>=0.13.3             # src/gui/charts.py：实时曲线与历史柱状图
 
 # --- 网络 ---
