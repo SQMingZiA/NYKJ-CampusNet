@@ -442,6 +442,9 @@ class WifiView(QWidget):
 # 整轮诊断的最长等待时间；超过就恢复按钮，避免一直停在「测试中」。
 DIAG_TIMEOUT_SEC = 180.0
 
+# 用量趋势最多能往前翻多少天（约 10 年），防止一直点把时间戳算到负数。
+MAX_RANGE_OFFSET = 3650
+
 
 class DiagView(QWidget):
     """网络诊断：一次点击依次跑完连通性、延迟、DNS、下载、上传。"""
@@ -876,6 +879,7 @@ class TrafficView(QWidget):
         self._period_index = 0
         self._custom_range: tuple[dt.datetime, dt.datetime] | None = None
         self._range_token = 0
+        self._day_offset = 0
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -915,6 +919,16 @@ class TrafficView(QWidget):
         self.period_combo.setCurrentIndex(0)
         self.period_combo.setMinimumWidth(150)
         chart_row.addWidget(self.period_combo)
+        self.prev_range_button = PushButton(FIF.LEFT_ARROW, "上一天", self)
+        self.prev_range_button.setToolTip("整段往前挪一天，例如 11-11 ~ 11-17 变成 11-10 ~ 11-16")
+        self.prev_range_button.clicked.connect(lambda: self._shift_range(-1))
+        chart_row.addWidget(self.prev_range_button)
+        self.next_range_button = PushButton(FIF.RIGHT_ARROW, "下一天", self)
+        self.next_range_button.setToolTip("整段往后挪一天；已经是最新一段时不可用")
+        self.next_range_button.clicked.connect(lambda: self._shift_range(1))
+        chart_row.addWidget(self.next_range_button)
+        self.range_label = BodyLabel("", self)
+        chart_row.addWidget(self.range_label)
         chart_row.addStretch(1)
         self.refresh_button = PushButton(FIF.SYNC, "刷新", self)
         self.refresh_button.clicked.connect(self.refresh)
@@ -956,18 +970,42 @@ class TrafficView(QWidget):
         _insert(layout, detail)
 
         self.period_combo.currentIndexChanged.connect(self._on_period_changed)
+        self._sync_range_nav(*self._current_range())
+
+    def _range_end(self) -> dt.datetime:
+        """当前窗口的右边界（不含）：今天 0 点 + 1 天，再叠加「下一天/上一天」的偏移。"""
+        today = dt.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        return today + dt.timedelta(days=1 + self._day_offset)
 
     def _default_range(self) -> tuple[dt.datetime, dt.datetime]:
-        today = dt.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        return today - dt.timedelta(days=6), today + dt.timedelta(days=1)
+        end = self._range_end()
+        return end - dt.timedelta(days=7), end
 
     def _current_range(self) -> tuple[dt.datetime, dt.datetime]:
-        today = dt.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        end = self._range_end()
         if self._period_index == 1:
-            return today - dt.timedelta(days=13), today - dt.timedelta(days=6)
+            return end - dt.timedelta(days=14), end - dt.timedelta(days=7)
         if self._period_index == 2 and self._custom_range is not None:
-            return self._custom_range
+            start, custom_end = self._custom_range
+            shift = dt.timedelta(days=self._day_offset)
+            return start + shift, custom_end + shift
         return self._default_range()
+
+    def _shift_range(self, days: int) -> None:
+        """以当前窗口为基准整段前后移动一天；最新一段不能再往后。"""
+        target = max(-MAX_RANGE_OFFSET, min(0, self._day_offset + days))
+        if target == self._day_offset:
+            return
+        self._day_offset = target
+        self.refresh()
+
+    def _sync_range_nav(self, start: dt.datetime, end: dt.datetime) -> None:
+        """刷新「上一天/下一天」可用状态与当前区间文本。"""
+        if hasattr(self, "next_range_button"):
+            self.next_range_button.setEnabled(self._day_offset < 0)
+        if hasattr(self, "range_label"):
+            last = end - dt.timedelta(days=1)
+            self.range_label.setText(f"当前：{start:%Y-%m-%d} ~ {last:%Y-%m-%d}")
 
     def _on_period_changed(self, index: int) -> None:
         if index == 2:
@@ -976,6 +1014,7 @@ class TrafficView(QWidget):
             if dialog.exec_():
                 self._custom_range = dialog.selected_range()
                 self._period_index = 2
+                self._day_offset = 0
                 self.refresh()
             else:
                 self.period_combo.blockSignals(True)
@@ -1011,6 +1050,7 @@ class TrafficView(QWidget):
         token = self._range_token
         run_async(self.service.traffic.summary, on_done=self._apply_summary)
         start, end = self._current_range()
+        self._sync_range_nav(start, end)
         run_async(
             self.service.traffic_range,
             start.timestamp(),
@@ -1616,14 +1656,17 @@ class SelfServiceView(QWidget):
         self.date_edit.setFixedWidth(136)
         self.date_edit.setFixedHeight(32)
         log_row.addWidget(self.date_edit)
-        self.today_button = PushButton("今天", self)
-        self.today_button.setFixedHeight(32)
-        self.today_button.clicked.connect(lambda: self._set_log_date(0))
-        log_row.addWidget(self.today_button)
-        self.yesterday_button = PushButton("昨天", self)
-        self.yesterday_button.setFixedHeight(32)
-        self.yesterday_button.clicked.connect(lambda: self._set_log_date(1))
-        log_row.addWidget(self.yesterday_button)
+        self.prev_day_button = PushButton(FIF.LEFT_ARROW, "上一天", self)
+        self.prev_day_button.setFixedHeight(32)
+        self.prev_day_button.setToolTip("按当前选中的日期往前一天")
+        self.prev_day_button.clicked.connect(lambda: self._shift_log_date(-1))
+        log_row.addWidget(self.prev_day_button)
+        self.next_day_button = PushButton(FIF.RIGHT_ARROW, "下一天", self)
+        self.next_day_button.setFixedHeight(32)
+        self.next_day_button.setToolTip("按当前选中的日期往后一天；今天之后没有记录")
+        self.next_day_button.clicked.connect(lambda: self._shift_log_date(1))
+        log_row.addWidget(self.next_day_button)
+        self.date_edit.dateChanged.connect(lambda _d: self._sync_log_date_buttons())
         self.log_button = PrimaryPushButton(FIF.SEARCH, "查询", self)
         self.log_button.setFixedHeight(32)
         self.log_button.clicked.connect(self.load_net_log)
@@ -1635,6 +1678,7 @@ class SelfServiceView(QWidget):
         self.log_table = _make_table(["开始", "结束", "时长", "上传", "下载", "合计", "IP", "设备(MAC)"])
         self.log_card.add(self.log_table)
         _insert(layout, self.log_card)
+        self._sync_log_date_buttons()
 
         self.misc_card = Card("其他接口数据", parent=self)
         misc_row = QHBoxLayout()
@@ -1796,10 +1840,23 @@ class SelfServiceView(QWidget):
 
         run_async(self.service.selfservice_call, "bills", on_done=done, on_error=self._fail)
 
-    def _set_log_date(self, days_ago: int = 0) -> None:
-        """快捷切换上网明细日期并立即查询。"""
-        self.date_edit.setDate(QDate.currentDate().addDays(-days_ago))
+    def _shift_log_date(self, days: int = 0) -> None:
+        """按当前选中的日期前后移动一天，并立即查询。"""
+        if not days:
+            self.load_net_log()
+            return
+        target = self.date_edit.date().addDays(days)
+        today = QDate.currentDate()
+        if target > today:
+            target = today
+        self.date_edit.setDate(target)
+        self._sync_log_date_buttons()
         self.load_net_log()
+
+    def _sync_log_date_buttons(self) -> None:
+        """选中今天时「下一天」没有意义，置灰。"""
+        if hasattr(self, "next_day_button"):
+            self.next_day_button.setEnabled(self.date_edit.date() < QDate.currentDate())
 
     def _style_pause_button(self) -> None:
         """把「申请暂停」画成红色描边按钮：会立刻断网的动作必须一眼可辨。"""

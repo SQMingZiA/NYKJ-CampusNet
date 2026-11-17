@@ -21,6 +21,7 @@ from __future__ import annotations
 import html
 import os
 import sys
+from typing import Any
 
 from PyQt5.QtCore import QSettings, QSize, Qt, QTimer, QUrl, pyqtSignal
 from PyQt5.QtGui import QDesktopServices, QIcon, QKeySequence
@@ -38,9 +39,11 @@ from PyQt5.QtWidgets import (
 from qfluentwidgets import PrimaryPushButton
 
 from ..core.deps import resource_path
+from ..net.http import get
 from ..core.settings import display_name
 
 from . import icons, theme
+from .async_task import run_async
 from .widgets import body_label
 
 try:
@@ -202,6 +205,32 @@ def prepare_webengine() -> None:
         return
 
 
+def probe_verdict(probe: dict | None) -> str:
+    """根据一次 HTTP 探测的结果判断页面是不是其实有内容。
+
+    Portal 页面里嵌了一些自定义协议的 iframe（例如 ``paulsawesomeapp://``），
+    Chromium 加载不了子框架就把整次加载记成失败，但主文档早就渲染好了。
+    这种情况下 HTTP 探测能拿到 2xx/3xx 和完整 HTML，就该把内容留下。
+
+    返回 ``"content"``（有内容，别盖错误页）或 ``"failed"``。
+    """
+    if not isinstance(probe, dict):
+        return "failed"
+    if not probe.get("ok"):
+        return "failed"
+    try:
+        status = int(probe.get("status") or 0)
+    except (TypeError, ValueError):
+        status = 0
+    if status >= 500:
+        return "failed"
+    try:
+        length = len(str(probe.get("text") or ""))
+    except Exception:
+        length = 0
+    return "content" if length >= 256 else "failed"
+
+
 def guard_verdict(*, seq: int, nav_seq: int, busy: bool, current: str, failed: str,
                   error_code: int) -> str:
     """判断一次「加载失败」到底要不要真的显示错误页。
@@ -248,6 +277,7 @@ class BrowserWindow(QWidget):
         self._last_error_text = ""
         self._nav_seq = 0
         self._fail_pending = False
+        self._failure_probing = False
         self._error_page_pending = False
 
         self.setWindowFlags(Qt.Window)
@@ -823,10 +853,51 @@ class BrowserWindow(QWidget):
                 self._update_title(title)
             return
 
+        if failed.startswith("http") and not self._failure_probing:
+            self._probe_page(seq, failed, detail)
+            return
+
         self._set_loading(False)
         self._set_status("failed", f"{failed}（{detail}）" if detail else failed)
         self._update_title("页面打不开")
         self._show_error_page(failed, detail)
+
+    def _probe_page(self, seq: int, url: str, detail: str = "") -> None:
+        """Chromium 说失败，再用 HTTP 确认一次：能拿到 HTML 就说明页面是真的。"""
+        self._failure_probing = True
+        run_async(
+            get,
+            url,
+            timeout=6.0,
+            allow_redirects=True,
+            on_done=lambda result: self._on_failure_probe(seq, url, detail, result),
+            on_error=lambda _message: self._on_failure_probe(seq, url, detail, None),
+        )
+
+    def _on_failure_probe(self, seq: int, url: str, detail: str, result: Any) -> None:
+        """HTTP 复核回来：有内容就恢复成「已加载」，否则才显示错误页。"""
+        self._failure_probing = False
+        if seq != self._nav_seq or self.view is None:
+            return
+        payload = result if isinstance(result, dict) else {
+            "ok": getattr(result, "ok", False),
+            "status": getattr(result, "status", 0),
+            "text": getattr(result, "text", ""),
+        }
+        if probe_verdict(payload) == "content":
+            self._failed_url = ""
+            title = self._page_title()
+            self._set_loading(False)
+            self._set_status("loaded", title or url)
+            self._update_title(title)
+            return
+
+        status = payload.get("status")
+        extra = f"HTTP {status}" if status else (detail or "无法连接到该地址")
+        self._set_loading(False)
+        self._set_status("failed", f"{url}（{extra}）")
+        self._update_title("页面打不开")
+        self._show_error_page(url, extra)
 
     def _finish_success(self) -> None:
         url = self._url_now()
