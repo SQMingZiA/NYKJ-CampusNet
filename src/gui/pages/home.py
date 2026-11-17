@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import time
 
 from typing import Any
@@ -23,6 +24,7 @@ from qfluentwidgets import (
     PushButton,
     StrongBodyLabel,
     SubtitleLabel,
+    TransparentToolButton,
 )
 
 from .. import theme
@@ -148,10 +150,23 @@ class HomePage(QWidget):
 
         self.notice_card = Card(parent=self)
         self.notice_card.set_background("#FFF7D6", "#3B3320")
+        notice_head = QHBoxLayout()
+        notice_head.setContentsMargins(0, 0, 0, 0)
+        notice_head.setSpacing(6)
+        self.notice_title = StrongBodyLabel("校园网公告", self)
+        notice_head.addWidget(self.notice_title)
+        notice_head.addStretch(1)
+        self.notice_close_button = TransparentToolButton(FIF.CLOSE, self)
+        self.notice_close_button.setToolTip("关闭这条公告；可在「设置 → 界面与启动」重新打开")
+        self.notice_close_button.clicked.connect(self._dismiss_notice)
+        notice_head.addWidget(self.notice_close_button)
+        self.notice_card.add_layout(notice_head)
+
         self.notice_text = BodyLabel("正在读取公告…", self)
         self.notice_text.setWordWrap(True)
         self.notice_text.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.notice_card.add(self.notice_text)
+        self._notice_sig = ""
 
         self.notice_button = PushButton(FIF.SYNC, "刷新", self)
         self.notice_button.setVisible(False)
@@ -307,10 +322,31 @@ class HomePage(QWidget):
     def _set_notice_body(self, lines: list[str]) -> None:
         """公告全文展示；卡片高度按实际换行行数计算，避免长公告被截断。"""
         full = chr(10).join(lines)
+        self._notice_sig = hashlib.sha1(full.encode("utf-8")).hexdigest()[:16]
         self.notice_text.setText(full)
         self.notice_text.setToolTip(full)
+        if self._notice_sig == str(self.service.settings.get("notice_dismissed") or ""):
+            # 用户关过这条公告：只要内容没变就不再打扰。
+            self.notice_card.setVisible(False)
+            return
         self.notice_card.setVisible(True)
         QTimer.singleShot(0, self._fit_notice_height)
+
+    def _dismiss_notice(self) -> None:
+        """记住这条公告的指纹，之后内容变了才会再次出现。"""
+        sig = getattr(self, "_notice_sig", "")
+        if sig:
+            run_async(self.service.update_config, {"notice_dismissed": sig})
+        self.notice_card.setVisible(False)
+
+    def set_notice_visible(self, visible: bool) -> None:
+        """设置页的「主页显示校园网公告」开关；重新打开时清掉关闭记录。"""
+        if not visible:
+            self.notice_card.setVisible(False)
+            return
+        run_async(self.service.update_config, {"notice_dismissed": ""})
+        self.notice_card.setVisible(True)
+        self.refresh_notice()
 
     def _fit_notice_height(self) -> None:
         """按卡片实际宽度把换行后的文本高度算出来（CardWidget 不传播 heightForWidth）。"""

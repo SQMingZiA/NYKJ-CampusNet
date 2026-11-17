@@ -79,6 +79,7 @@ DEFAULTS: dict[str, Any] = {
 
     "home_show_notice": True,
     "notice_refresh_minutes": 10,
+    "notice_dismissed": "",
 
     "app_name": "",
 
@@ -299,6 +300,9 @@ class Settings:
         name = self._data.get("app_name")
         name = name.strip()[:APP_NAME_MAX] if isinstance(name, str) else ""
         self._data["app_name"] = name
+
+        dismissed = self._data.get("notice_dismissed")
+        self._data["notice_dismissed"] = dismissed.strip()[:64] if isinstance(dismissed, str) else ""
 
         patterns = self._data.get("wifi_allow_list")
         if not isinstance(patterns, list):

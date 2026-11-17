@@ -452,6 +452,12 @@ class SettingsPage(QWidget):
             '在主页展示套餐名称、到期时间与流量（来自学校自助系统）',
             parent=appearance,
         )
+        self.home_notice_row = SwitchRow(
+            FIF.MESSAGE,
+            '主页显示校园网公告',
+            '关闭公告卡后，这里重新打开会清掉关闭记录并再读一次',
+            parent=appearance,
+        )
         self.developer_row = SwitchRow(
             FIF.ROBOT,
             '开发者模式',
@@ -467,6 +473,7 @@ class SettingsPage(QWidget):
             self.auto_launch_row,
             self.start_min_row,
             self.home_package_row,
+            self.home_notice_row,
             self.developer_row,
         ):
             appearance.addSettingCard(card)
@@ -482,6 +489,7 @@ class SettingsPage(QWidget):
                 self.auto_launch_row,
                 self.start_min_row,
                 self.home_package_row,
+                self.home_notice_row,
                 self.developer_row,
             ],
         )
@@ -752,6 +760,7 @@ class SettingsPage(QWidget):
         on(self.auto_launch_row.changed, self._on_auto_launch)
         on(self.start_min_row.changed, lambda v: self._save({'start_minimized': v}))
         on(self.home_package_row.changed, self._on_home_package)
+        on(self.home_notice_row.changed, self._on_home_notice)
         on(self.developer_row.changed, self._on_developer_mode)
         on(
             self.app_name_row.edit.editingFinished,
@@ -815,6 +824,7 @@ class SettingsPage(QWidget):
         self.auto_launch_row.set_checked(bool(config.get('auto_launch')))
         self.start_min_row.set_checked(bool(config.get('start_minimized')))
         self.home_package_row.set_checked(bool(config.get('home_show_package', True)))
+        self.home_notice_row.set_checked(bool(config.get('home_show_notice', True)))
         self.developer_row.set_checked(bool(config.get('developer_mode')))
 
         self._apply_ssid_table(config.get('wifi_allow_list') or [])
@@ -959,6 +969,16 @@ class SettingsPage(QWidget):
                 pass
         finally:
             self._loading = False
+
+    def _on_home_notice(self, value: bool) -> None:
+        patch = {'home_show_notice': value}
+        if value:
+            patch['notice_dismissed'] = ''
+        self._save(patch)
+        if self._window is not None and hasattr(
+            self._window.home_page, 'set_notice_visible'
+        ):
+            self._window.home_page.set_notice_visible(value)
 
     def _on_home_package(self, value: bool) -> None:
         self._save({'home_show_package': value})
@@ -1213,4 +1233,4 @@ def _app_version() -> str:
         from main import __version__
         return str(__version__)
     except Exception:
-        return '1.3.3'
+        return '1.4.0'
