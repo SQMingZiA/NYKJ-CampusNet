@@ -405,6 +405,36 @@ class TrafficMonitor:
             bucket['total'] += item['total']
         return [buckets[index] for index in sorted(buckets)]
 
+    def daily_totals(self, days: int = 84) -> list[dict[str, Any]]:
+        """最近 ``days`` 天的每日用量（升序，最后一天是今天，缺失日期补 0）。
+
+        热力图用：按小时桶 key 的前 10 位归日，先在锁内拷贝快照再计算，
+        避免统计期间长时间占用采样锁。
+        """
+        span = max(1, min(366, int(days or 1)))
+        today = dt.date.today()
+        start = today - dt.timedelta(days=span - 1)
+        with self._lock:
+            snapshot = [(key, dict(value)) for key, value in self._history.items()]
+
+        daily: dict[str, dict[str, int]] = {}
+        for key, value in snapshot:
+            if key_to_ts(key) is None:
+                continue
+            day = str(key)[:10]
+            bucket = daily.setdefault(day, {'rx': 0, 'tx': 0})
+            bucket['rx'] += int(value.get('rx', 0))
+            bucket['tx'] += int(value.get('tx', 0))
+
+        out: list[dict[str, Any]] = []
+        for offset in range(span):
+            day = (start + dt.timedelta(days=offset)).isoformat()
+            bucket = daily.get(day) or {'rx': 0, 'tx': 0}
+            rx = int(bucket['rx'])
+            tx = int(bucket['tx'])
+            out.append({'date': day, 'rx': rx, 'tx': tx, 'total': rx + tx})
+        return out
+
     def summary(self) -> dict[str, Any]:
         now = dt.datetime.now()
         start_today = now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()

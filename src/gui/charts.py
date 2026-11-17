@@ -1,15 +1,20 @@
-"""实时流量曲线与历史用量柱状图（基于 pyqtgraph，外观跟着主题走）。
+"""实时流量曲线、历史用量柱状图、每日用量热力图与诊断趋势图（外观跟着主题走）。
+
+前两个图基于 pyqtgraph，热力图是纯 ``QWidget`` 自绘的 GitHub 贡献图样式。
 
 两条曲线都支持**鼠标悬停查看具体数值**：
 把鼠标移到图上，会出现竖线 + 数值气泡（时刻、下行、上行）。
 """
 from __future__ import annotations
 
+import datetime as dt
 import time
 from collections import deque
+from typing import Any
 
 import pyqtgraph as pg
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QPoint, QRect, QSize, Qt, pyqtSignal
+from PyQt5.QtGui import QColor, QPainter, QPen
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
 from . import theme
@@ -364,3 +369,329 @@ class HistoryChart(QWidget):
             else:
                 ticks.append((index, label[5:] if len(label) >= 10 else label))
         return ticks
+
+
+class HeatmapChart(QWidget):
+    """GitHub 贡献图样式的每日用量热力图（纯 QWidget 自绘）。"""
+
+    dayClicked = pyqtSignal(str)
+
+    CELL = 16
+    GAP = 3
+    PITCH = CELL + GAP
+    LEFT_W = 34
+    TOP_H = 24
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._rows: list[dict[str, Any]] = []
+        self._grid: dict[tuple[int, int], dict[str, Any]] = {}
+        self._week_count = 12
+        self._month_labels: list[tuple[int, str]] = []
+        self._max_total = 0
+        self.selected_date: str | None = None
+        self.setMouseTracking(True)
+        self.setMinimumHeight(150)
+        self.setToolTip("把鼠标移到格子上可查看当天用量；点一下选中当天")
+
+    def set_days(self, rows: list[dict[str, Any]]) -> None:
+        """设置每日数据（按日期升序，最后一天是今天）。"""
+        self._rows = [dict(item) for item in (rows or [])]
+        self._max_total = max(
+            (int(item.get("total") or 0) for item in self._rows), default=0
+        )
+        self._rebuild_cells()
+        if self.selected_date and self.selected_date not in self._grid_dates():
+            self.selected_date = None
+        self.updateGeometry()
+        self.update()
+
+    def clear(self) -> None:
+        """清空数据与选中状态。"""
+        self._rows = []
+        self._grid = {}
+        self._month_labels = []
+        self._max_total = 0
+        self._week_count = 12
+        self.selected_date = None
+        self.updateGeometry()
+        self.update()
+
+    def _grid_dates(self) -> set[str]:
+        return {str(item.get("date") or "") for item in self._rows}
+
+    def _rebuild_cells(self) -> None:
+        """按自然周（周一为列首）把日期铺进网格。"""
+        self._grid = {}
+        self._month_labels = []
+        dated: list[tuple[dt.date, dict[str, Any]]] = []
+        for item in self._rows:
+            raw = str(item.get("date") or "")
+            try:
+                day = dt.date.fromisoformat(raw[:10])
+            except ValueError:
+                continue
+            dated.append((day, item))
+        if not dated:
+            self._week_count = 12
+            return
+
+        first_day = min(day for day, _ in dated)
+        first_monday = first_day - dt.timedelta(days=first_day.weekday())
+        today = dt.date.today()
+        last_day = max(today, max(day for day, _ in dated))
+        last_monday = last_day - dt.timedelta(days=last_day.weekday())
+        self._week_count = max(1, (last_monday - first_monday).days // 7 + 1)
+
+        seen_months: set[int] = set()
+        for day, item in dated:
+            column = (day - first_monday).days // 7
+            if column < 0 or column >= self._week_count:
+                continue
+            self._grid[(column, day.weekday())] = item
+            if day.day == 1 and day.month not in seen_months:
+                seen_months.add(day.month)
+                self._month_labels.append((column, f"{day.month}月"))
+
+    def _cell_rect(self, column: int, row: int) -> QRect:
+        return QRect(
+            self.LEFT_W + column * self.PITCH,
+            self.TOP_H + row * self.PITCH,
+            self.CELL,
+            self.CELL,
+        )
+
+    def cell_at(self, pos: QPoint) -> dict[str, Any] | None:
+        """命中测试：返回 ``pos`` 所在格子的数据行，空格子/空白返回 ``None``。"""
+        x = int(pos.x()) - self.LEFT_W
+        y = int(pos.y()) - self.TOP_H
+        if x < 0 or y < 0:
+            return None
+        column, offset_x = divmod(x, self.PITCH)
+        row, offset_y = divmod(y, self.PITCH)
+        if offset_x >= self.CELL or offset_y >= self.CELL:
+            return None
+        if column >= self._week_count or row >= 7:
+            return None
+        return self._grid.get((column, row))
+
+    def _cell_color(self, item: dict[str, Any]) -> QColor:
+        """按该图最大值的四分位分 4 级，叠加不同透明度。"""
+        total = int(item.get("total") or 0)
+        if total <= 0:
+            return QColor("#2B2B2B" if theme.is_dark() else "#EDEDED")
+        ratio = total / float(self._max_total or 1)
+        if ratio <= 0.25:
+            alpha = 0.28
+        elif ratio <= 0.5:
+            alpha = 0.5
+        elif ratio <= 0.75:
+            alpha = 0.72
+        else:
+            alpha = 1.0
+        color = QColor(theme.color("accent") or "#0F6CBD")
+        color.setAlpha(int(round(255 * alpha)))
+        return color
+
+    def sizeHint(self) -> QSize:
+        weeks = max(7, self._week_count)
+        return QSize(
+            self.LEFT_W + weeks * self.PITCH + 4,
+            self.TOP_H + 7 * self.PITCH + 4,
+        )
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        font = painter.font()
+        font.setPointSize(9)
+        painter.setFont(font)
+        painter.setPen(QColor(theme.color("text_muted")))
+
+        if not self._rows:
+            painter.drawText(self.rect(), Qt.AlignCenter, "暂无数据")
+            return
+
+        for row, text in ((0, "一"), (2, "三"), (4, "五"), (6, "日")):
+            rect = QRect(0, self.TOP_H + row * self.PITCH, self.LEFT_W - 6, self.CELL)
+            painter.drawText(rect, Qt.AlignRight | Qt.AlignVCenter, text)
+
+        for column, text in self._month_labels:
+            rect = QRect(
+                self.LEFT_W + column * self.PITCH,
+                2,
+                self.PITCH * 2 + self.CELL,
+                self.TOP_H - 6,
+            )
+            painter.drawText(rect, Qt.AlignLeft | Qt.AlignVCenter, text)
+
+        for (column, row), item in self._grid.items():
+            rect = self._cell_rect(column, row)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(self._cell_color(item))
+            painter.drawRoundedRect(rect, 3, 3)
+
+        if self.selected_date:
+            for (column, row), item in self._grid.items():
+                if str(item.get("date") or "") != self.selected_date:
+                    continue
+                painter.setPen(QPen(QColor(theme.color("accent")), 1))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawRoundedRect(
+                    self._cell_rect(column, row).adjusted(0, 0, -1, -1), 3, 3
+                )
+                break
+
+    def mouseMoveEvent(self, event) -> None:
+        item = self.cell_at(event.pos())
+        if item is None:
+            self.setToolTip("")
+        elif int(item.get("total") or 0) <= 0:
+            self.setToolTip(f"{item.get('date')} · 没有记录")
+        else:
+            self.setToolTip(
+                f"{item.get('date')} · 共 {format_bytes(item.get('total'))}"
+                f"（↓ {format_bytes(item.get('rx'))} ↑ {format_bytes(item.get('tx'))}）"
+            )
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            item = self.cell_at(event.pos())
+            if item is not None:
+                date = str(item.get("date") or "")
+                if date:
+                    self.selected_date = date
+                    self.update()
+                    self.dayClicked.emit(date)
+        super().mouseReleaseEvent(event)
+
+class TrendChart(QWidget):
+    """网络诊断的历史趋势：上面是延迟（毫秒），下面是速率（Mbps）。
+
+    每条记录来自一次「一键网络诊断」，横轴是时间。失败的那几次会在延迟曲线
+    上打一个红点，方便回看「什么时候开始变差」。
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._records: list[dict[str, Any]] = []
+
+        self.latency_plot = pg.PlotWidget()
+        self.latency_plot.setBackground(None)
+        self.latency_plot.showGrid(y=True, alpha=0.16)
+        self.latency_plot.setMouseEnabled(x=False, y=False)
+        self.latency_plot.hideButtons()
+        self.latency_plot.setMenuEnabled(False)
+        self.latency_plot.setLabel('left', '延迟')
+        self.latency_plot.getAxis('left').setWidth(56)
+        self.latency_plot.getAxis('bottom').setStyle(showValues=False)
+        self.latency_plot.setToolTip('每次诊断的延迟与抖动（毫秒）')
+
+        self.speed_plot = pg.PlotWidget()
+        self.speed_plot.setBackground(None)
+        self.speed_plot.showGrid(y=True, alpha=0.16)
+        self.speed_plot.setMouseEnabled(x=False, y=False)
+        self.speed_plot.hideButtons()
+        self.speed_plot.setMenuEnabled(False)
+        self.speed_plot.setLabel('left', '速率')
+        self.speed_plot.getAxis('left').setWidth(56)
+        self.speed_plot.setToolTip('每次诊断的下载与上传速率（Mbps）')
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        layout.addWidget(self.latency_plot)
+        layout.addWidget(self.speed_plot)
+        self.setMinimumHeight(260)
+
+        self._style_axes()
+
+    def _style_axes(self) -> None:
+        colors = theme.chart_colors()
+        for plot in (self.latency_plot, self.speed_plot):
+            for axis in ('left', 'bottom'):
+                plot.getAxis(axis).setPen(pg.mkPen(color=colors['grid'], width=1))
+                plot.getAxis(axis).setTextPen(pg.mkPen(color=colors['text']))
+
+    def apply_theme(self) -> None:
+        """主题切换后重画。"""
+        self._style_axes()
+        if self._records:
+            self.set_records(self._records)
+
+    def clear(self) -> None:
+        """清空两张图。"""
+        self._records = []
+        self.latency_plot.clear()
+        self.speed_plot.clear()
+
+    def set_records(self, records: list[dict[str, Any]]) -> None:
+        """设置诊断记录（时间升序，字段见 ``DiagnosticHistory``）。"""
+        self._records = list(records or [])
+        self.latency_plot.clear()
+        self.speed_plot.clear()
+        if not self._records:
+            return
+
+        colors = theme.chart_colors()
+        items = self._records
+        xs = list(range(len(items)))
+        labels = [time.strftime('%m-%d %H:%M', time.localtime(float(item.get('at') or 0))) for item in items]
+
+        latency = [float(item.get('latency_ms') or 0.0) for item in items]
+        jitter = [float(item.get('jitter_ms') or 0.0) for item in items]
+        dns = [float(item.get('dns_ms') or 0.0) for item in items]
+
+        self.latency_plot.addItem(pg.PlotDataItem(
+            xs, latency, pen=pg.mkPen(colors['rx'], width=2),
+            symbol='o', symbolSize=5, symbolBrush=pg.mkBrush(colors['rx']),
+            symbolPen=pg.mkPen(None), name='延迟',
+        ))
+        self.latency_plot.addItem(pg.PlotDataItem(
+            xs, jitter, pen=pg.mkPen(colors['tx'], width=1, style=Qt.DashLine), name='抖动',
+        ))
+        self.latency_plot.addItem(pg.PlotDataItem(
+            xs, dns, pen=pg.mkPen(colors['text'], width=1), name='DNS',
+        ))
+
+        bad = [i for i, item in enumerate(items) if not item.get('ok', True)]
+        if bad:
+            self.latency_plot.addItem(pg.ScatterPlotItem(
+                [xs[i] for i in bad], [latency[i] for i in bad],
+                symbol='x', size=9, brush=pg.mkBrush(colors['rx']),
+                pen=pg.mkPen(colors['rx'], width=2),
+            ))
+        peak = max(latency + jitter + dns + [1.0])
+        self.latency_plot.setYRange(0, peak * 1.2, padding=0)
+
+        down = [float(item.get('down_bps') or 0) / 125000.0 for item in items]
+        up = [float(item.get('up_bps') or 0) / 125000.0 for item in items]
+        self.speed_plot.addItem(pg.PlotDataItem(
+            xs, down, pen=pg.mkPen(colors['rx'], width=2),
+            symbol='o', symbolSize=5, symbolBrush=pg.mkBrush(colors['rx']),
+            symbolPen=pg.mkPen(None), name='下载',
+        ))
+        self.speed_plot.addItem(pg.PlotDataItem(
+            xs, up, pen=pg.mkPen(colors['tx'], width=2),
+            symbol='t', symbolSize=5, symbolBrush=pg.mkBrush(colors['tx']),
+            symbolPen=pg.mkPen(None), name='上传',
+        ))
+        top = max(down + up + [0.1])
+        self.speed_plot.setYRange(0, top * 1.2, padding=0)
+
+        for plot in (self.latency_plot, self.speed_plot):
+            plot.setXRange(-0.6, len(items) - 0.4, padding=0)
+            ticks = self._ticks(xs, labels)
+            plot.getAxis('bottom').setTicks([ticks])
+        self.latency_plot.getAxis('bottom').setStyle(showValues=False)
+        self.speed_plot.getAxis('bottom').setStyle(showValues=True)
+        self._style_axes()
+
+    @staticmethod
+    def _ticks(xs: list[int], labels: list[str]) -> list[tuple[float, str]]:
+        """横轴上最多 5 个刻度，避免挤在一起。"""
+        if not xs:
+            return []
+        step = max(1, (len(xs) + 4) // 5)
+        return [(float(xs[i]), labels[i]) for i in range(0, len(xs), step)]

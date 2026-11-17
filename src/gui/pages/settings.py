@@ -1233,4 +1233,4 @@ def _app_version() -> str:
         from main import __version__
         return str(__version__)
     except Exception:
-        return '1.4.0'
+        return '1.5.0'
