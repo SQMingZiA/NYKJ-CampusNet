@@ -95,6 +95,8 @@ DEFAULTS: dict[str, Any] = {
     # 热点共享：名称/密码先存这里，下次启动热点的瞬间写进系统配置。
     "hotspot_ssid": "",
     "hotspot_password": "",
+    "hotspot_band": "",
+    "hotspot_names": {},
 
     "window_geometry": "",
 
@@ -304,10 +306,19 @@ class Settings:
         if self._data.get("theme") not in ("auto", "light", "dark"):
             self._data["theme"] = DEFAULTS["theme"]
 
-        for key, limit in (("hotspot_ssid", 32), ("hotspot_password", 63)):
+        for key, limit in (("hotspot_ssid", 32), ("hotspot_password", 63), ("hotspot_band", 8)):
             value = self._data.get(key)
             value = value.strip()[:limit] if isinstance(value, str) else ""
             self._data[key] = value
+
+        names = self._data.get("hotspot_names")
+        if not isinstance(names, dict):
+            names = {}
+        self._data["hotspot_names"] = {
+            str(mac): str(label).strip()[:32]
+            for mac, label in names.items()
+            if str(mac).strip() and str(label).strip()
+        }
 
         name = self._data.get("app_name")
         name = name.strip()[:APP_NAME_MAX] if isinstance(name, str) else ""

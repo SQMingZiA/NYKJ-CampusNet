@@ -929,12 +929,24 @@ class Service(QObject):
                 data["passphrase"] = saved_password
         return data
 
-    def hotspot_start(self, ssid: str = "", password: str = "") -> dict[str, Any]:
-        """启动热点；没给名称/密码就用设置里存的（改动要下一次启动才写进系统）。"""
+    def hotspot_start(self, ssid: str = "", password: str = "", band: str = "") -> dict[str, Any]:
+        """启动热点；没给名称/密码/频段就用设置里存的。"""
         try:
             name = ssid or str(self.settings.get("hotspot_ssid") or "")
             secret = password or str(self.settings.get("hotspot_password") or "")
-            return hotspot.start(name, secret)
+            freq = band or str(self.settings.get("hotspot_band") or "")
+            return hotspot.start(name, secret, freq)
+        except Exception as exc:
+            return {"ok": False, "message": str(exc)}
+
+    def hotspot_restart(self, ssid: str = "", password: str = "", band: str = "") -> dict[str, Any]:
+        """先停再起：改完名称/密码不想手动点两次时用。"""
+        try:
+            self.hotspot_stop()
+            name = ssid or str(self.settings.get("hotspot_ssid") or "")
+            secret = password or str(self.settings.get("hotspot_password") or "")
+            freq = band or str(self.settings.get("hotspot_band") or "")
+            return hotspot.start(name, secret, freq)
         except Exception as exc:
             return {"ok": False, "message": str(exc)}
 
@@ -944,7 +956,7 @@ class Service(QObject):
         except Exception as exc:
             return {"ok": False, "message": str(exc)}
 
-    def hotspot_configure(self, ssid: str, password: str) -> dict[str, Any]:
+    def hotspot_configure(self, ssid: str, password: str, band: str = "") -> dict[str, Any]:
         """保存热点名称/密码：先落盘到设置，再尝试立即写进系统。"""
         try:
             check = hotspot.check_credentials(ssid, password)
@@ -952,8 +964,9 @@ class Service(QObject):
                 return {"ok": False, "message": check.get("error") or "名称或密码不符合要求"}
             self.settings.set("hotspot_ssid", ssid.strip())
             self.settings.set("hotspot_password", password)
+            self.settings.set("hotspot_band", band)
             self.settings.save()
-            result = hotspot.configure(ssid.strip(), password)
+            result = hotspot.configure(ssid.strip(), password, band)
             result["saved"] = True
             return result
         except Exception as exc:
@@ -961,9 +974,35 @@ class Service(QObject):
 
     def hotspot_devices(self) -> list[dict[str, Any]]:
         try:
-            return hotspot.devices()
+            devices = hotspot.devices()
         except Exception:
             return []
+        names = self.settings.get("hotspot_names") or {}
+        if isinstance(names, dict):
+            for device in devices:
+                custom = str(names.get(str(device.get("mac") or "")) or "")
+                if custom:
+                    device["custom_name"] = custom
+                    device["name"] = custom
+        return devices
+
+    def hotspot_rename(self, mac: str, name: str) -> dict[str, Any]:
+        """给设备起一个好认的名字（按 MAC 存，换 IP 也不丢）。"""
+        try:
+            key = str(mac or "").strip().upper()
+            if not key:
+                return {"ok": False, "message": "缺少 MAC 地址"}
+            names = dict(self.settings.get("hotspot_names") or {})
+            text = str(name or "").strip()[:32]
+            if text:
+                names[key] = text
+            else:
+                names.pop(key, None)
+            self.settings.set("hotspot_names", names)
+            self.settings.save()
+            return {"ok": True, "name": text}
+        except Exception as exc:
+            return {"ok": False, "message": str(exc)}
 
     def hotspot_block(self, ip: str) -> dict[str, Any]:
         try:

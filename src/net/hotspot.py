@@ -56,39 +56,53 @@ _CAPABILITY_TEXT = {
 
 # 常见厂商 OUI，只用于把设备列表写得好看一点；查不到就用 MAC 前三段。
 _OUI = {
-    "F4:3B:D8": "Intel",
-    "64:9A:BE": "Apple",
-    "A4:B1:C1": "Apple",
-    "D0:81:7A": "Apple",
-    "F0:18:98": "Apple",
-    "8C:85:90": "Apple",
-    "3C:22:FB": "Apple",
-    "BC:92:6B": "Apple",
-    "A0:8C:FD": "Apple",
-    "5C:AA:FD": "Samsung",
-    "B4:EF:FA": "Samsung",
-    "D8:9E:3F": "Samsung",
-    "F8:E6:1A": "Samsung",
-    "C8:3A:6B": "Samsung",
-    "7C:1E:52": "Xiaomi",
-    "64:CC:2E": "Xiaomi",
-    "34:CE:00": "Xiaomi",
-    "50:8F:4C": "Xiaomi",
-    "00:9E:C8": "Xiaomi",
-    "10:2E:AF": "Honor",
-    "F4:9F:54": "Huawei",
-    "00:E0:FC": "Huawei",
-    "48:DB:50": "Huawei",
-    "3C:CD:5D": "Huawei",
-    "8C:79:F5": "OPPO",
-    "64:A2:F9": "OPPO",
-    "E8:BB:A5": "vivo",
-    "3C:BD:3E": "vivo",
-    "58:44:98": "Xiaomi",
-    "20:32:33": "Lenovo",
-    "54:EE:75": "Wistron",
-    "00:1A:7D": "Cyber-Tan",
-    "B0:BE:76": "TP-Link",
+    # Apple
+    "64:9A:BE": "Apple", "A4:B1:C1": "Apple", "D0:81:7A": "Apple", "F0:18:98": "Apple",
+    "8C:85:90": "Apple", "3C:22:FB": "Apple", "BC:92:6B": "Apple", "A0:8C:FD": "Apple",
+    "F0:99:BF": "Apple", "AC:BC:32": "Apple", "70:DE:E2": "Apple", "04:0C:CE": "Apple",
+    "1C:9E:46": "Apple", "28:37:37": "Apple", "3C:AB:8E": "Apple", "6C:19:C0": "Apple",
+    "7C:D1:C3": "Apple", "84:FC:FE": "Apple", "9C:FC:01": "Apple", "A8:88:08": "Apple",
+    "C8:BC:C8": "Apple", "D4:61:9D": "Apple", "E0:AC:CB": "Apple", "F4:5C:89": "Apple",
+    # 三星
+    "5C:AA:FD": "Samsung", "B4:EF:FA": "Samsung", "D8:9E:3F": "Samsung", "F8:E6:1A": "Samsung",
+    "C8:3A:6B": "Samsung", "78:1F:DB": "Samsung", "84:11:9E": "Samsung", "94:35:0A": "Samsung",
+    "A0:21:95": "Samsung", "CC:07:AB": "Samsung", "E8:50:8B": "Samsung", "34:23:BA": "Samsung",
+    # 小米 / 红米
+    "7C:1E:52": "Xiaomi", "64:CC:2E": "Xiaomi", "34:CE:00": "Xiaomi", "50:8F:4C": "Xiaomi",
+    "00:9E:C8": "Xiaomi", "58:44:98": "Xiaomi", "8C:BE:BE": "Xiaomi", "9C:99:A0": "Xiaomi",
+    "A8:9C:ED": "Xiaomi", "C4:0B:CB": "Xiaomi", "D4:97:0B": "Xiaomi", "F0:B4:29": "Xiaomi",
+    # 华为 / 荣耀
+    "F4:9F:54": "Huawei", "00:E0:FC": "Huawei", "48:DB:50": "Huawei", "3C:CD:5D": "Huawei",
+    "04:BD:70": "Huawei", "10:2E:AF": "Honor", "20:0B:C7": "Huawei", "24:69:A5": "Huawei",
+    "50:01:D9": "Huawei", "6C:92:BF": "Huawei", "84:A8:E4": "Huawei", "9C:28:EF": "Huawei",
+    # OPPO / vivo / 一加 / realme
+    "8C:79:F5": "OPPO", "64:A2:F9": "OPPO", "C0:EE:FB": "OPPO", "D8:9E:F3": "OPPO",
+    "E8:BB:A5": "vivo", "3C:BD:3E": "vivo", "B4:6B:FC": "vivo", "D4:8A:39": "vivo",
+    "94:65:2D": "OnePlus", "C0:9F:42": "OnePlus", "AC:C1:EE": "realme", "FC:39:64": "realme",
+    # 电脑 / 网卡
+    "F4:3B:D8": "Intel", "20:32:33": "Lenovo", "54:EE:75": "Wistron", "B0:BE:76": "TP-Link",
+    "00:1A:7D": "Cyber-Tan", "3C:91:80": "Broadcom", "5C:5F:67": "Broadcom",
+    "8C:C6:81": "Intel", "9C:B6:D0": "Intel", "A4:BB:6D": "Intel", "D8:3B:BF": "Intel",
+    "00:0C:29": "VMware", "00:50:56": "VMware", "08:00:27": "VirtualBox",
+    "B8:27:EB": "Raspberry Pi", "DC:A6:32": "Raspberry Pi", "E4:5F:01": "Raspberry Pi",
+    # 路由器 / 智能硬件
+    "F4:EC:38": "TP-Link", "50:C7:BF": "TP-Link", "60:32:B1": "TP-Link", "A4:2B:B0": "TP-Link",
+    "34:96:72": "Xiaomi", "78:11:DC": "Xiaomi", "F0:B0:14": "Xiaomi",
+    "D4:6E:0E": "TP-Link", "18:A6:F7": "TP-Link",
+    "18:B4:30": "Nest", "44:65:0D": "Amazon", "68:37:E9": "Amazon", "F0:27:2D": "Amazon",
+    "30:FD:38": "Google", "54:60:09": "Google", "F4:F5:D8": "Google",
+    "9C:8E:99": "Sony", "00:04:4B": "NVIDIA", "48:B0:2D": "NVIDIA",
+}
+
+# 按厂商粗分一下设备类型，界面显示成「Apple 手机」这种。
+_VENDOR_KIND = {
+    "Apple": "手机 / 平板", "Samsung": "手机 / 平板", "Xiaomi": "手机 / 平板",
+    "Huawei": "手机 / 平板", "Honor": "手机 / 平板", "OPPO": "手机 / 平板",
+    "vivo": "手机 / 平板", "OnePlus": "手机 / 平板", "realme": "手机 / 平板",
+    "Intel": "电脑", "Lenovo": "电脑", "Wistron": "电脑", "Broadcom": "电脑",
+    "VMware": "虚拟机", "VirtualBox": "虚拟机", "Raspberry Pi": "开发板",
+    "TP-Link": "网络设备", "Nest": "智能设备", "Amazon": "智能设备",
+    "Google": "智能设备", "Sony": "游戏 / 影音", "NVIDIA": "游戏 / 影音",
 }
 
 # ---- WinRT（pywinrt）--------------------------------------------------------
@@ -550,17 +564,38 @@ def default_ssid() -> str:
     return DEFAULT_SSID.format(suffix=f"{random.randint(0x1000, 0xFFFF):04X}")
 
 
-def _with_config(ssid: str, passphrase: str) -> Any:
+_BAND_ENUM = {"2.4": "BAND_2_4GHZ", "5": "BAND_5GHZ", "auto": "AUTO"}
+_BAND_TEXT = {"BAND_2_4GHZ": "2.4 GHz", "BAND_5GHZ": "5 GHz", "AUTO": "自动"}
+
+
+def band_text(value: str) -> str:
+    """把系统枚举/设置值翻成界面文字。"""
+    raw = str(value or "").strip()
+    return _BAND_TEXT.get(raw, {"2.4": "2.4 GHz", "5": "5 GHz", "auto": "自动"}.get(raw.lower(), "自动"))
+
+
+def _apply_band(cfg: Any, band: str) -> None:
+    name = _BAND_ENUM.get(str(band or "").strip().lower())
+    if not name or _nop is None:
+        return
+    try:
+        cfg.band = getattr(_nop.AccessPointBand, name)
+    except Exception:  # noqa: BLE001 - 老系统没有 band 属性
+        pass
+
+
+def _with_config(ssid: str, passphrase: str, band: str = "") -> Any:
     """构造一份访问点配置。"""
     cfg = _nop.NetworkOperatorTetheringAccessPointConfiguration()
     if ssid:
         cfg.ssid = ssid
     if passphrase:
         cfg.passphrase = passphrase
+    _apply_band(cfg, band)
     return cfg
 
 
-def configure(ssid: str, passphrase: str) -> dict[str, Any]:
+def configure(ssid: str, passphrase: str, band: str = "") -> dict[str, Any]:
     """写入热点名称/密码。
 
     注意：热点**没开**的时候系统不会真正落盘这份配置（WinRT 与 netsh 都一样），
@@ -576,7 +611,7 @@ def configure(ssid: str, passphrase: str) -> dict[str, Any]:
             manager = _manager()
             if _enum_name(manager.tethering_operational_state) not in ("ON", "On"):
                 return {"ok": True, "error": "", "pending": True}
-            _run_coro(lambda: manager.configure_access_point_async(_with_config(ssid, passphrase)), timeout=30.0)
+            _run_coro(lambda: manager.configure_access_point_async(_with_config(ssid, passphrase, band)), timeout=30.0)
             return {"ok": True, "error": ""}
         if backend == "powershell":
             raw = _run_ps("configure", ssid, passphrase, timeout=45.0)
@@ -590,7 +625,7 @@ def configure(ssid: str, passphrase: str) -> dict[str, Any]:
         return {"ok": False, "error": str(exc)}
 
 
-def start(ssid: str = "", passphrase: str = "") -> dict[str, Any]:
+def start(ssid: str = "", passphrase: str = "", band: str = "") -> dict[str, Any]:
     """启动热点；给了名称/密码就先写进去再开。"""
     if ssid or passphrase:
         check = check_credentials(ssid, passphrase)
@@ -601,12 +636,13 @@ def start(ssid: str = "", passphrase: str = "") -> dict[str, Any]:
         if backend == "winrt":
             manager = _manager()
             cfg = None
-            if ssid or passphrase:
+            if ssid or passphrase or band:
                 cfg = manager.get_current_access_point_configuration()
                 if ssid:
                     cfg.ssid = ssid
                 if passphrase:
                     cfg.passphrase = passphrase
+                _apply_band(cfg, band)
                 _run_coro(lambda: manager.configure_access_point_async(cfg), timeout=30.0)
             result = _run_coro(manager.start_tethering_async, timeout=45.0)
             state = _enum_name(result.status) if result is not None else ""
@@ -686,7 +722,42 @@ def _vendor(mac: str) -> str:
     return _OUI.get(key, "")
 
 
-def _hostname(ip: str) -> str:
+_NAME_CACHE: dict[str, tuple[float, str]] = {}
+_NAME_TTL = 300.0
+
+
+def _reverse_dns(ip: str, timeout: float = 1.5) -> str:
+    """反向 DNS：Windows 的 ICS 会跑一个 DNS 代理，部分设备能直接反查到名字。"""
+    import socket
+    import threading
+
+    holder: dict[str, str] = {}
+
+    def work() -> None:
+        try:
+            holder["name"] = str(socket.gethostbyaddr(ip)[0] or "")
+        except Exception:  # noqa: BLE001
+            pass
+
+    worker = threading.Thread(target=work, daemon=True)
+    worker.start()
+    worker.join(timeout)
+    return holder.get("name", "")
+
+
+def _netbios_name(ip: str, timeout: float = 4.0) -> str:
+    """NetBIOS：Windows 电脑通常会回应 nbtstat，手机一般不会。"""
+    result = run(["nbtstat", "-A", ip], timeout=timeout)
+    for line in (result.stdout or "").splitlines():
+        if "<00>" not in line or "UNIQUE" not in line:
+            continue
+        name = line.split("<00>")[0].replace("  ", " ").strip()
+        if name and name.upper() != "MAC":
+            return name
+    return ""
+
+
+def _ping_name(ip: str) -> str:
     try:
         result = run(["ping", "-a", "-n", "1", "-w", "300", ip], timeout=5.0)
         text = result.stdout or ""
@@ -697,6 +768,62 @@ def _hostname(ip: str) -> str:
                     return name
     except Exception:  # noqa: BLE001
         pass
+    return ""
+
+
+def _hostname(ip: str, refresh: bool = False) -> str:
+    """依次尝试反向 DNS、NetBIOS、ping -a，结果缓存 5 分钟。"""
+    if not ip:
+        return ""
+    now = time.time()
+    cached = _NAME_CACHE.get(ip)
+    if cached and not refresh and now - cached[0] < _NAME_TTL:
+        return cached[1]
+    name = _reverse_dns(ip) or _netbios_name(ip) or _ping_name(ip)
+    if name.count(".") == 3:  # 拿到的还是 IP
+        name = ""
+    _NAME_CACHE[ip] = (now, name)
+    return name
+
+
+def _looks_random_mac(mac: str) -> bool:
+    """MAC 第一字节的第二个 bit 为 1 表示本地管理地址（手机「随机 MAC」）。"""
+    try:
+        first = int(mac.split(":")[0], 16)
+    except (ValueError, IndexError):
+        return False
+    return bool(first & 0x02)
+
+
+def _vendor_kind(vendor: str) -> str:
+    return _VENDOR_KIND.get(vendor or "", "")
+
+
+_NAME_HINTS = (
+    ("iphone", "Apple"), ("ipad", "Apple"), ("macbook", "Apple"), ("imac", "Apple"),
+    ("xiaomi", "Xiaomi"), ("redmi", "Xiaomi"), ("poco", "Xiaomi"), ("mi-", "Xiaomi"),
+    ("huawei", "Huawei"), ("honor", "Honor"), ("oppo", "OPPO"), ("vivo", "vivo"),
+    ("oneplus", "OnePlus"), ("realme", "realme"), ("samsung", "Samsung"), ("galaxy", "Samsung"),
+    ("pixel", "Google"), ("surface", "Microsoft"), ("thinkpad", "Lenovo"), ("lenovo", "Lenovo"),
+    ("dell", "Dell"), ("hp-", "HP"), ("asus", "ASUS"), ("acer", "Acer"), ("mac", "Apple"),
+)
+
+
+def _clean_name(name: str) -> str:
+    """去掉 ``.mshome.net`` / ``.local`` 这类后缀，只留设备名。"""
+    text = (name or "").strip().rstrip(".")
+    for suffix in (".mshome.net", ".local", ".lan", ".home", ".localdomain"):
+        if text.lower().endswith(suffix):
+            return text[: -len(suffix)]
+    return text
+
+
+def _infer_vendor(name: str) -> str:
+    """随机 MAC 查不到厂商时，从主机名里猜一个（Xiaomi-17-Pro-Max 之类）。"""
+    low = (name or "").lower()
+    for hint, vendor in _NAME_HINTS:
+        if hint in low:
+            return vendor
     return ""
 
 
@@ -738,29 +865,34 @@ def devices() -> list[dict[str, Any]]:
     by_mac = {row["mac"]: row for row in rows}
     blocked = blocked_ips()
     result: list[dict[str, Any]] = []
+
+    def fill(name: str, ip: str, mac: str) -> dict[str, Any]:
+        host = _clean_name(name or _hostname(ip))
+        vendor = _vendor(mac) or _infer_vendor(host)
+        kind = _vendor_kind(vendor)
+        if not host:
+            host = f"{vendor} 设备" if vendor else "未命名设备"
+        return {
+            "ip": ip,
+            "mac": mac,
+            "name": host,
+            "named": bool(host) and host not in (f"{vendor} 设备", "未命名设备"),
+            "vendor": vendor or "未知",
+            "vendor_prefix": mac[:8] or "—",
+            "kind": kind,
+            "random_mac": _looks_random_mac(mac),
+            "blocked": ip in blocked if ip else False,
+        }
+
     for item in info.get("client_list") or []:
         mac = str(item.get("mac") or "").upper().replace("-", ":")
-        row = by_mac.pop(mac, None)
-        result.append(
-            {
-                "ip": (row or {}).get("ip", ""),
-                "mac": mac,
-                "name": str(item.get("name") or "") or (row or {}).get("name", "") or "未命名设备",
-                "vendor": _vendor(mac),
-                "blocked": bool((row or {}).get("ip") in blocked) if row else False,
-            }
-        )
+        row = by_mac.pop(mac, None) or {}
+        result.append(fill(str(item.get("name") or ""), str(row.get("ip") or ""), mac))
+
     for row in by_mac.values():
-        row = dict(row)
-        row["name"] = row.get("name") or _hostname(row["ip"]) or "未命名设备"
-        row["blocked"] = row["ip"] in blocked
-        result.append(row)
-    for row in result:
-        if not row.get("name") or row["name"] == "未命名设备":
-            host = _hostname(row["ip"]) if row.get("ip") else ""
-            if host:
-                row["name"] = host
-    result.sort(key=lambda item: item.get("ip") or "999")
+        result.append(fill("", str(row.get("ip") or ""), str(row.get("mac") or "")))
+
+    result.sort(key=lambda entry: int((entry.get("ip") or "0.0.0.0").rsplit(".", 1)[-1] or 0))
     return result
 
 

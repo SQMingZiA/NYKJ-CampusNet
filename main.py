@@ -21,7 +21,7 @@ DEPS = deps.setup()
 
 from src.core.winutil import is_admin, restart_as_admin
 
-__version__ = '1.11.0'
+__version__ = '1.12.0'
 __all__ = ['main', '__version__']
 
 
