@@ -30,6 +30,16 @@ jobs:
       - name: Install PyInstaller
         run: python -m pip install pyinstaller
 
+      # 热点共享的快速后端（可选）：装不上时自动退回内置 PowerShell，不影响打包。
+      - name: Install hotspot extras
+        continue-on-error: true
+        run: >-
+          python -m pip install
+          winrt-Windows.Networking.NetworkOperators
+          winrt-Windows.Networking.Connectivity
+          winrt-Windows.Foundation
+          winrt-Windows.Foundation.Collections
+
       - name: Selftest before packaging
         env:
           QT_QPA_PLATFORM: offscreen
