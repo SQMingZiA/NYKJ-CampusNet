@@ -36,6 +36,7 @@ from . import theme
 from .pages.developer import DeveloperPage
 from .pages.home import HomePage
 from .pages.settings import SettingsPage
+from .pages.hotspot import HotspotPage
 from .pages.tools import AccountView, DiagView, SelfServiceView, TrafficView, WifiView
 from .toasts import Toast
 
@@ -110,7 +111,18 @@ class MainWindow(FluentWindow):
             pass
 
         self.addSubInterface(self.home_page, FIF.HOME, "主页")
+        self.hotspot_page: HotspotPage | None = None
+        try:
+            supported = bool(service.hotspot_supported())
+        except Exception:
+            supported = False
+        if supported:
+            self.hotspot_page = HotspotPage(service, self)
+            self.hotspot_page.setObjectName("HotspotPage")
+
         self.addSubInterface(self.wifi_page, FIF.WIFI, "无线网络")
+        if self.hotspot_page is not None:
+            self.addSubInterface(self.hotspot_page, FIF.SHARE, "热点共享")
         self.addSubInterface(self.diag_page, FIF.SPEED_HIGH, "网络诊断")
         self.addSubInterface(self.traffic_page, FIF.CLOUD, "流量统计")
         self.addSubInterface(self.account_page, FIF.PEOPLE, "账户与设备")
@@ -131,7 +143,7 @@ class MainWindow(FluentWindow):
 
     def nav_pages(self) -> list[QWidget]:
         """导航里的六个常驻页面，顺序与左侧导航一致（开发者页按需插入）。"""
-        return [
+        pages = [
             self.home_page,
             self.wifi_page,
             self.diag_page,
@@ -139,6 +151,9 @@ class MainWindow(FluentWindow):
             self.account_page,
             self.settings_page,
         ]
+        if self.hotspot_page is not None:
+            pages.insert(2, self.hotspot_page)
+        return pages
 
     def _install_shortcuts(self) -> None:
         """全局快捷键：没有鼠标也能走完常用路径。"""
@@ -178,7 +193,7 @@ class MainWindow(FluentWindow):
         self._show_from_tray()
 
     def pages(self) -> list[QWidget]:
-        return [
+        pages = [
             self.home_page,
             self.wifi_page,
             self.diag_page,
@@ -187,6 +202,9 @@ class MainWindow(FluentWindow):
             self.settings_page,
             self.developer_page,
         ]
+        if self.hotspot_page is not None:
+            pages.insert(2, self.hotspot_page)
+        return pages
 
     def _sync_developer_page(self) -> None:
         """按设置决定「开发者」是否出现在导航里。"""

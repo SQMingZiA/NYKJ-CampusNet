@@ -8,7 +8,14 @@ PyQt-Fluent-Widgets>=1.5.4    # qfluentwidgets：窗口 / 卡片 / 设置项控�
 # 注：无边框窗口（qframelesswindow）由 PyQt-Fluent-Widgets 传递依赖的
 # PyQt5-Frameless-Window 提供；不要再单独装 pyqt-frameless-window，
 # 那是另一个作者的同名模块，会和它抢 qframelesswindow 包。
-pyqtgraph>=0.13.3             # src/gui/charts.py：实时曲线与历史柱状图
+pyqtgraph>=0.13.3
+# 热点共享（可选）：pywinrt 拆分包直接调系统 WinRT（NetworkOperatorTetheringManager），
+# 装上后启停约 1~2 秒；不装则退回内置 PowerShell，功能一致、稍慢。
+# 没有 WinRT 能力的机器上该板块会自动隐藏，因此这里保持注释、不作硬依赖。
+# winrt-Windows.Networking.NetworkOperators>=3.2.0
+# winrt-Windows.Networking.Connectivity>=3.2.0
+# winrt-Windows.Foundation>=3.2.0
+# winrt-Windows.Foundation.Collections>=3.2.0
 
 # --- 网络 ---
 requests>=2.31.0              # src/net/http.py 优先使用，不可用时回退 urllib

@@ -20,7 +20,7 @@ from ..core.settings import Settings
 from ..core.sysinfo import gateway_info, is_elevated, os_info, public_ip, system_summary
 from ..core.traffic import TrafficMonitor
 from ..core.deps import PROJECT_ROOT, resource_path
-from ..net import diagnostics, wifi
+from ..net import diagnostics, hotspot, wifi
 from ..portal import selfbase
 from ..portal.auth import AuthEngine
 from ..portal.selfservice import SelfService
@@ -896,6 +896,97 @@ class Service(QObject):
     def reset_traffic(self) -> dict[str, Any]:
         self.traffic.reset()
         return {"ok": True}
+
+    # ------------------------------------------------------------------
+    # 热点共享
+    # ------------------------------------------------------------------
+    def hotspot_supported(self) -> bool:
+        """本机能不能把 Wi-Fi 转成热点（决定侧边栏是否显示该板块）。"""
+        try:
+            return bool(hotspot.detect().get("supported"))
+        except Exception:
+            return False
+
+    def hotspot_info(self) -> dict[str, Any]:
+        """能力探测结果，界面用来解释「为什么没有这个板块」。"""
+        try:
+            return hotspot.detect()
+        except Exception as exc:
+            return {"supported": False, "backend": "none", "reason": str(exc), "adapter": ""}
+
+    def hotspot_status(self) -> dict[str, Any]:
+        try:
+            data = hotspot.status()
+        except Exception as exc:
+            return {"running": False, "reason": str(exc), "clients": 0}
+        # 未运行时用设置里保存的名称/密码，避免界面显示系统里那份旧配置。
+        if not data.get("running"):
+            saved_ssid = str(self.settings.get("hotspot_ssid") or "")
+            saved_password = str(self.settings.get("hotspot_password") or "")
+            if saved_ssid:
+                data["ssid"] = saved_ssid
+            if saved_password:
+                data["passphrase"] = saved_password
+        return data
+
+    def hotspot_start(self, ssid: str = "", password: str = "") -> dict[str, Any]:
+        """启动热点；没给名称/密码就用设置里存的（改动要下一次启动才写进系统）。"""
+        try:
+            name = ssid or str(self.settings.get("hotspot_ssid") or "")
+            secret = password or str(self.settings.get("hotspot_password") or "")
+            return hotspot.start(name, secret)
+        except Exception as exc:
+            return {"ok": False, "message": str(exc)}
+
+    def hotspot_stop(self) -> dict[str, Any]:
+        try:
+            return hotspot.stop()
+        except Exception as exc:
+            return {"ok": False, "message": str(exc)}
+
+    def hotspot_configure(self, ssid: str, password: str) -> dict[str, Any]:
+        """保存热点名称/密码：先落盘到设置，再尝试立即写进系统。"""
+        try:
+            check = hotspot.check_credentials(ssid, password)
+            if not check.get("ok"):
+                return {"ok": False, "message": check.get("error") or "名称或密码不符合要求"}
+            self.settings.set("hotspot_ssid", ssid.strip())
+            self.settings.set("hotspot_password", password)
+            self.settings.save()
+            result = hotspot.configure(ssid.strip(), password)
+            result["saved"] = True
+            return result
+        except Exception as exc:
+            return {"ok": False, "message": str(exc)}
+
+    def hotspot_devices(self) -> list[dict[str, Any]]:
+        try:
+            return hotspot.devices()
+        except Exception:
+            return []
+
+    def hotspot_block(self, ip: str) -> dict[str, Any]:
+        try:
+            return hotspot.block_device(ip)
+        except Exception as exc:
+            return {"ok": False, "message": str(exc)}
+
+    def hotspot_unblock(self, ip: str) -> dict[str, Any]:
+        try:
+            return hotspot.unblock_device(ip)
+        except Exception as exc:
+            return {"ok": False, "message": str(exc)}
+
+    def hotspot_open_settings(self) -> dict[str, Any]:
+        """打开 Windows 的「移动热点」设置页（启动失败时让用户自己确认系统状态）。"""
+        try:
+            return hotspot.open_settings()
+        except Exception as exc:
+            return {"ok": False, "message": str(exc)}
+
+    def hotspot_defaults(self) -> dict[str, str]:
+        """给界面用的默认热点名与随机密码。"""
+        return {"ssid": hotspot.default_ssid(), "password": hotspot.random_password()}
 
     def open_data_dir(self) -> None:
         from ..core.winutil import open_path

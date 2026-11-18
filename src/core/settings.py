@@ -92,6 +92,10 @@ DEFAULTS: dict[str, Any] = {
 
     "developer_mode": False,
 
+    # 热点共享：名称/密码先存这里，下次启动热点的瞬间写进系统配置。
+    "hotspot_ssid": "",
+    "hotspot_password": "",
+
     "window_geometry": "",
 
     # 只在第一次「关闭到托盘」时提示一句，之后安静地缩到托盘。
@@ -299,6 +303,11 @@ class Settings:
 
         if self._data.get("theme") not in ("auto", "light", "dark"):
             self._data["theme"] = DEFAULTS["theme"]
+
+        for key, limit in (("hotspot_ssid", 32), ("hotspot_password", 63)):
+            value = self._data.get(key)
+            value = value.strip()[:limit] if isinstance(value, str) else ""
+            self._data[key] = value
 
         name = self._data.get("app_name")
         name = name.strip()[:APP_NAME_MAX] if isinstance(name, str) else ""

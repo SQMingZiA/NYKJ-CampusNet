@@ -37,7 +37,7 @@ jobs:
         run: python main.py --selftest
 
       - name: Build with PyInstaller
-        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --uac-admin --name CampusNet --icon resources\app.ico --add-data "resources;resources" --collect-submodules src --hidden-import PyQt5.QtWebEngineWidgets --hidden-import PyQt5.QtWebEngineCore --hidden-import PyQt5.QtWebChannel --hidden-import pyqtgraph --hidden-import qfluentwidgets --hidden-import qframelesswindow --hidden-import win32api --hidden-import win32crypt --hidden-import win32com.client --exclude-module tkinter --exclude-module matplotlib --exclude-module PyQt6 main.py
+        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --uac-admin --name CampusNet --icon resources\app.ico --add-data "resources;resources" --collect-submodules src --hidden-import PyQt5.QtWebEngineWidgets --hidden-import PyQt5.QtWebEngineCore --hidden-import PyQt5.QtWebChannel --hidden-import pyqtgraph --hidden-import qfluentwidgets --hidden-import qframelesswindow --hidden-import win32api --hidden-import win32crypt --hidden-import win32com.client --hidden-import winrt.windows.networking.networkoperators --hidden-import winrt.windows.networking.connectivity --hidden-import winrt.windows.foundation --hidden-import winrt.windows.foundation.collections --exclude-module tkinter --exclude-module matplotlib --exclude-module PyQt6 main.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
